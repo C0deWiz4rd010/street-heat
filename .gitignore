@@ -1,0 +1,11 @@
+node_modules/
+dist/
+.vite/
+.DS_Store
+Thumbs.db
+*.log
+vite-live.out.log
+vite-live.err.log
+vite-start.out.log
+vite-start.err.log
+.chrome-profile/
