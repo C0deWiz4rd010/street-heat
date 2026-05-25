@@ -215,13 +215,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function updatePlayer(dt, input) {
         const model = CAR_MODELS[state.playerModelIndex];
         const player = state.player;
+        const district = state.district ?? DISTRICTS[0];
+        const inShortcut = district.id === "park" && isInsideShortcutZone(player.x, player.z);
         const engineLevel = state.upgrades.engine;
         const gripLevel = state.upgrades.grip;
         const nitroLevel = state.upgrades.nitro;
         const weatherGrip = WEATHER_MODES[state.weather.mode]?.grip ?? 1;
-        const maxSpeed = model.maxSpeed * (1 + engineLevel * 0.075);
+        const maxSpeed = model.maxSpeed * (1 + engineLevel * 0.075) + (inShortcut ? district.shortcutBoost ?? 0 : 0);
         const acceleration = model.acceleration * (1 + engineLevel * 0.085) * (0.92 + weatherGrip * 0.08);
-        const turnPower = model.turn * (1 + gripLevel * 0.045) * weatherGrip;
+        const turnPower = model.turn * (1 + gripLevel * 0.045) * weatherGrip * (inShortcut ? 1.08 : 1);
         const brakePower = (8.5 + gripLevel * 1.9) * weatherGrip;
         const nitroMax = getNitroMax();
         const keys = input.keys;
@@ -237,7 +239,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             player.nitro = Math.max(0, player.nitro - dt * CONFIG.player.nitroBurn);
             spawnParticle(player.x - Math.sin(player.rotation) * 2, player.z - Math.cos(player.rotation) * 2, "#63c8ff", 2);
         } else {
-            player.nitro = Math.min(nitroMax, player.nitro + dt * (CONFIG.player.nitroRegen + nitroLevel * 0.9));
+            const districtNitro = district.nitroRegenBonus ?? 0;
+            const shortcutNitro = inShortcut ? 0.95 : 0;
+            player.nitro = Math.min(nitroMax, player.nitro + dt * (CONFIG.player.nitroRegen + nitroLevel * 0.9 + districtNitro + shortcutNitro));
         }
 
         if (forward) {
@@ -355,14 +359,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function completeMission() {
         const reward = 850 + state.mission.stage * 230 + (state.mission.type === "heist" ? 600 : 0);
         addScore(reward, true);
-        addCash(Math.floor(reward * 0.34));
+        const cashGain = addCash(Math.floor(reward * 0.34));
         state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 30);
         state.stats.missions += 1;
         state.lifetime.missions += 1;
         if (state.wanted.level <= 2) state.stats.missionsLowHeat += 1;
         refreshProgress();
         audio?.mission();
-        setStatus(`Mission ${state.mission.stage} abgeschlossen. Bonus $${Math.floor(reward * 0.34)}.`, 3);
+        setStatus(`Mission ${state.mission.stage} abgeschlossen. Bonus $${cashGain}.`, 3);
         setMission(state.mission.stage + 1);
     }
 
@@ -384,9 +388,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function collectPickup(index) {
         const pickup = pickups[index];
         const info = PICKUP_TYPES[pickup.type];
+        const district = getDistrictAt(pickup.x, pickup.z);
         const gained = addScore(info.score);
         addCash(info.cash || 0);
-        if (info.heal) state.player.health = Math.min(getMaxHealth(), state.player.health + info.heal);
+        if (info.heal) {
+            const healAmount = Math.round(info.heal * (district.healMultiplier ?? 1));
+            state.player.health = Math.min(getMaxHealth(), state.player.health + healAmount);
+        }
         if (info.nitro) state.player.nitro = Math.min(getNitroMax(), state.player.nitro + info.nitro);
         if (info.emp) triggerEmp(pickup.x, pickup.z);
         if (info.wanted) updateWanted(state.wanted.level + info.wanted);
@@ -689,8 +697,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function updateWorldEvents(dt) {
-        state.worldEvent.timer -= dt;
-        if (!state.worldEvent.active && state.worldEvent.timer <= 0) spawnWorldEvent();
+        if (!state.worldEvent.active) {
+            state.worldEvent.timer -= dt * (state.district?.eventRate ?? 1);
+            if (state.worldEvent.timer <= 0) spawnWorldEvent();
+        }
 
         for (let index = eventPickups.length - 1; index >= 0; index -= 1) {
             const event = eventPickups[index];
@@ -700,14 +710,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.worldEvent.timer = Math.max(0, event.life);
             if (distanceSq(state.player.x, state.player.z, event.x, event.z) < 13) {
                 addScore(event.score, true);
-                addCash(event.cash || 0);
+                const cashGain = addCash(event.cash || 0);
                 if (event.heal) state.player.health = Math.min(getMaxHealth(), state.player.health + event.heal);
                 updateWanted(state.wanted.level + event.heat);
                 state.stats.events += 1;
                 state.lifetime.events += 1;
                 refreshProgress();
                 spawnParticle(event.x, event.z, event.color, 34);
-                setStatus(`${event.label} gesichert. Bank +$${event.cash || 0}.`, 2.5);
+                setStatus(`${event.label} gesichert. Bank +$${cashGain}.`, 2.5);
                 scene.remove(event.mesh);
                 eventPickups.splice(index, 1);
                 state.worldEvent.active = false;
@@ -745,15 +755,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function spawnPickup() {
-        const roll = Math.random();
-        const type = roll < 0.44 ? "cash" : roll < 0.6 ? "repair" : roll < 0.76 ? "nitro" : roll < 0.88 ? "intel" : roll < 0.96 ? "parts" : "emp";
-        let x = 0;
-        let z = 0;
-        for (let tries = 0; tries < 30; tries += 1) {
-            x = snapStreet((Math.random() - 0.5) * CONFIG.map.size * 0.92);
-            z = snapStreet((Math.random() - 0.5) * CONFIG.map.size * 0.92);
-            if (!insideBuilding(world, x, z, 1.5)) break;
-        }
+        const district = chooseSpawnDistrict("pickup");
+        const type = pickWeightedKey(district.pickupWeights);
+        const { x, z } = sampleDistrictSpawnPosition(district, district.id === "park");
         const info = PICKUP_TYPES[type];
         const mesh = new THREE.Mesh(pickupGeo, createMaterial(info.color, {
             roughness: 0.14,
@@ -764,15 +768,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         mesh.position.set(x, 1.35, z);
         mesh.castShadow = true;
         scene.add(mesh);
-        pickups.push({ mesh, type, x, z, baseY: 1.35, spin: 1.6 + Math.random() * 2.8, t: Math.random() * 10 });
+        pickups.push({ mesh, type, x, z, baseY: 1.35, spin: 1.6 + Math.random() * 2.8, t: Math.random() * 10, districtId: district.id });
     }
 
     function spawnWorldEvent() {
         if (eventPickups.length > 0) return;
-        const event = WORLD_EVENTS[Math.floor(Math.random() * WORLD_EVENTS.length)];
-        const poi = POIS[Math.floor(Math.random() * POIS.length)];
-        const x = snapStreet(poi.x + (Math.random() - 0.5) * 18);
-        const z = snapStreet(poi.z + (Math.random() - 0.5) * 18);
+        const district = chooseSpawnDistrict("event");
+        const eventId = pickWeightedKey(district.eventWeights);
+        const event = WORLD_EVENTS.find((entry) => entry.id === eventId) ?? WORLD_EVENTS[0];
+        const { x, z } = sampleDistrictSpawnPosition(district, false);
         const mesh = new THREE.Mesh(eventGeo, createMaterial(event.color, {
             roughness: 0.18,
             metalness: 0.7,
@@ -782,10 +786,20 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         mesh.position.set(x, 1.4, z);
         mesh.castShadow = true;
         scene.add(mesh);
-        eventPickups.push({ mesh, ...event, x, z, life: 38 });
+        eventPickups.push({
+            mesh,
+            ...event,
+            x,
+            z,
+            districtId: district.id,
+            score: Math.round(event.score * (district.eventScoreMultiplier ?? 1)),
+            cash: Math.round((event.cash || 0) * (district.eventCashMultiplier ?? 1)),
+            heat: (event.heat || 0) + (district.eventHeatBonus ?? 0),
+            life: district.id === "harbor" ? 34 : 38,
+        });
         state.worldEvent.active = true;
         state.worldEvent.label = event.label;
-        state.worldEvent.timer = 38;
+        state.worldEvent.timer = district.id === "harbor" ? 34 : 38;
         state.worldEvent.x = x;
         state.worldEvent.z = z;
         setStatus(`Event entdeckt: ${event.label}.`, 2);
@@ -858,6 +872,54 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return Math.random() < 0.7
             ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Shuttle" }
             : { ...CAR_MODELS[2], color: "#b8e2ff", trim: "#11354a", name: "Cycle Lane" };
+    }
+
+    function chooseSpawnDistrict(kind) {
+        const focusChance = kind === "event" ? 0.68 : 0.58;
+        if (Math.random() < focusChance) return state.district ?? DISTRICTS[0];
+        return DISTRICTS[Math.floor(Math.random() * DISTRICTS.length)];
+    }
+
+    function sampleDistrictSpawnPosition(district, preferShortcut = false) {
+        if (preferShortcut && district.id === "park" && world.shortcutZones?.length) {
+            const localZones = world.shortcutZones.filter((zone) => getDistrictAt(zone.x, zone.z).id === district.id);
+            if (localZones.length > 0 && Math.random() < 0.72) {
+                const zone = localZones[Math.floor(Math.random() * localZones.length)];
+                return {
+                    x: clamp(zone.x + (Math.random() - 0.5) * (zone.width - 0.8), -CONFIG.map.size / 2, CONFIG.map.size / 2),
+                    z: clamp(zone.z + (Math.random() - 0.5) * (zone.depth - 0.8), -CONFIG.map.size / 2, CONFIG.map.size / 2),
+                };
+            }
+        }
+
+        let x = 0;
+        let z = 0;
+        for (let tries = 0; tries < 30; tries += 1) {
+            const rawX = randomCoordinateForSign(district.x);
+            const rawZ = randomCoordinateForSign(district.z);
+            x = snapStreet(rawX);
+            z = snapStreet(rawZ);
+            if (!insideBuilding(world, x, z, 1.5)) break;
+        }
+        return { x, z };
+    }
+
+    function randomCoordinateForSign(sign) {
+        const min = sign < 0 ? -CONFIG.map.size / 2 : 0;
+        const max = sign < 0 ? 0 : CONFIG.map.size / 2;
+        return min + Math.random() * (max - min);
+    }
+
+    function pickWeightedKey(weights) {
+        const entries = Object.entries(weights ?? {});
+        let total = 0;
+        for (const [, value] of entries) total += value;
+        let roll = Math.random() * total;
+        for (const [key, value] of entries) {
+            roll -= value;
+            if (roll <= 0) return key;
+        }
+        return entries[0]?.[0] ?? "cash";
     }
 
     function getDistrictTrafficStreets(axis, district) {
@@ -1162,8 +1224,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function addCash(amount) {
         if (!amount) return;
-        state.cash += amount;
+        const multiplier = state.screen === "playing" ? state.district?.cashMultiplier ?? 1 : 1;
+        const gained = Math.round(amount * multiplier);
+        state.cash += gained;
         persistProfile();
+        return gained;
     }
 
     function spendCash(amount) {
@@ -1244,6 +1309,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const sx = x < 0 ? -1 : 1;
         const sz = z < 0 ? -1 : 1;
         return DISTRICTS.find((district) => district.x === sx && district.z === sz) ?? DISTRICTS[0];
+    }
+
+    function isInsideShortcutZone(x, z) {
+        if (!world.shortcutZones?.length) return false;
+        for (const zone of world.shortcutZones) {
+            if (Math.abs(x - zone.x) <= zone.width / 2 && Math.abs(z - zone.z) <= zone.depth / 2) return true;
+        }
+        return false;
     }
 
     function getNextUpgrade() {

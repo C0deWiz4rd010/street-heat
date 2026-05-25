@@ -6,6 +6,7 @@ export function createWorld(scene, sharedMaterials) {
     const buildings = [];
     const obstacles = [];
     const objects = [];
+    const shortcutZones = [];
     const districtMaterials = createDistrictMaterials(sharedMaterials);
 
     const ground = new THREE.Mesh(
@@ -57,7 +58,7 @@ export function createWorld(scene, sharedMaterials) {
             } else if (district.id === "industrial") {
                 decorateIndustrialBlock(scene, objects, buildings, obstacles, districtMaterials, bx, bz);
             } else if (district.id === "park") {
-                decorateParkBlock(scene, objects, buildings, obstacles, districtMaterials, bx, bz);
+                decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, districtMaterials, bx, bz);
             } else {
                 decorateHarborBlock(scene, objects, buildings, obstacles, districtMaterials, bx, bz);
             }
@@ -78,7 +79,7 @@ export function createWorld(scene, sharedMaterials) {
         objects.push(marker);
     }
 
-    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS };
+    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones };
 }
 
 export function insideBuilding(world, x, z, radius) {
@@ -291,16 +292,20 @@ function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials
     }
 }
 
-function decorateParkBlock(scene, objects, buildings, obstacles, materials, bx, bz) {
+function decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, materials, bx, bz) {
+    const pathOffsetZ = (Math.random() - 0.5) * 2;
     const pathX = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.blockSize * 0.9, 0.04, 2.4), materials.parkPath);
-    pathX.position.set(bx, 0.12, bz + (Math.random() - 0.5) * 2);
+    pathX.position.set(bx, 0.12, bz + pathOffsetZ);
     pathX.receiveShadow = true;
     scene.add(pathX);
+    shortcutZones.push({ x: bx, z: bz + pathOffsetZ, width: CONFIG.map.blockSize * 0.9, depth: 2.8 });
 
+    const pathOffsetX = (Math.random() - 0.5) * 2;
     const pathZ = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.04, CONFIG.map.blockSize * 0.9), materials.parkPath);
-    pathZ.position.set(bx + (Math.random() - 0.5) * 2, 0.12, bz);
+    pathZ.position.set(bx + pathOffsetX, 0.12, bz);
     pathZ.receiveShadow = true;
     scene.add(pathZ);
+    shortcutZones.push({ x: bx + pathOffsetX, z: bz, width: 2.8, depth: CONFIG.map.blockSize * 0.9 });
 
     if (Math.random() < 0.55) {
         const pond = new THREE.Mesh(
