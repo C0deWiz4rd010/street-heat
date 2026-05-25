@@ -59,6 +59,10 @@ Die Umsetzung erfolgt in drei Wellen:
 - Missions-HUD zeigt Bonusziel, Fortschritt und klarere Auftragstitel direkt im Run
 - Hot-Drop-Abgaben erlauben jetzt Risk-Reward-Entscheidungen: direkt kassieren oder weiterziehen fuer hoeheren Multiplikator bei steigendem Heat
 - Boss-Auftraege tauchen alle paar Runs als Sondermissionen auf: gepanzerter Transporter, Helikopterjagd und Hafenblockade
+- Polizeirollen sind jetzt klarer getrennt: Patrol Cruiser verfolgen direkt, SUVs rammen aggressiver, Bikes sind schnell aber fragil, Vans setzen mobile Sperren
+- Scanner-Zonen in Downtown, Industrie und Hafenzone treiben Heat schneller hoch und erscheinen auf der Minimap
+- Taktische Roadblocks orientieren sich an Fluchtachsen, Kreuzungen und Missionszielen statt nur zufaellig zu spawnen
+- Konterplay wurde ausgebaut: Deckung in Gassen und unter Hafenkraenen drueckt Helikopterdruck, durchbrochene Zaeune stoeren die Polizei-Sichtlinie kurzzeitig
 
 ## Priorisierte Problemstellen
 1. Ressourcenverwaltung:

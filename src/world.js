@@ -7,6 +7,7 @@ export function createWorld(scene, sharedMaterials) {
     const obstacles = [];
     const objects = [];
     const shortcutZones = [];
+    const scannerZones = [];
     const districtMaterials = createDistrictMaterials(sharedMaterials);
 
     const ground = new THREE.Mesh(
@@ -79,7 +80,9 @@ export function createWorld(scene, sharedMaterials) {
         objects.push(marker);
     }
 
-    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones };
+    createScannerZones(scene, scannerZones);
+
+    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones };
 }
 
 export function insideBuilding(world, x, z, radius) {
@@ -206,7 +209,7 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
         });
         scene.add(tower);
         objects.push(tower);
-        buildings.push({ x, z, hw: width / 2 + 0.8, hd: depth / 2 + 0.8 });
+        buildings.push({ x, z, hw: width / 2 + 0.8, hd: depth / 2 + 0.8, h: height });
     }
 
     const median = new THREE.Mesh(
@@ -267,7 +270,7 @@ function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials
         });
         scene.add(warehouse);
         objects.push(warehouse);
-        buildings.push({ x, z, hw: width / 2 + 0.8, hd: depth / 2 + 0.8 });
+        buildings.push({ x, z, hw: width / 2 + 0.8, hd: depth / 2 + 0.8, h: height });
     }
 
     const stacks = 3 + Math.floor(Math.random() * 2);
@@ -401,7 +404,7 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
     });
     scene.add(warehouse);
     objects.push(warehouse);
-    buildings.push({ x: warehouseX, z: warehouseZ, hw: warehouseWidth / 2 + 0.8, hd: warehouseDepth / 2 + 0.8 });
+    buildings.push({ x: warehouseX, z: warehouseZ, hw: warehouseWidth / 2 + 0.8, hd: warehouseDepth / 2 + 0.8, h: warehouseHeight });
 
     const stacks = 2 + Math.floor(Math.random() * 3);
     for (let index = 0; index < stacks; index += 1) {
@@ -879,6 +882,45 @@ function shuffle(items) {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+function createScannerZones(scene, scannerZones) {
+    const definitions = [
+        { x: 26, z: 26, radius: 8.4, districtId: "downtown", label: "Downtown Scan", heatBoost: 0.9, color: "#63c8ff" },
+        { x: -26, z: 26, radius: 9.2, districtId: "industrial", label: "Werkhof Scan", heatBoost: 1.05, color: "#ffb25c" },
+        { x: -26, z: -26, radius: 8.8, districtId: "harbor", label: "Harbor Customs", heatBoost: 1.15, color: "#7fd6ff" },
+    ];
+
+    for (const zone of definitions) {
+        const ring = new THREE.Mesh(
+            new THREE.TorusGeometry(zone.radius, 0.2, 12, 42),
+            createMaterial(zone.color, {
+                roughness: 0.18,
+                metalness: 0.56,
+                emissive: zone.color,
+                emissiveIntensity: 0.24,
+                transparent: true,
+                opacity: 0.42,
+            })
+        );
+        ring.rotation.x = Math.PI / 2;
+        ring.position.set(zone.x, 0.18, zone.z);
+        scene.add(ring);
+
+        const core = new THREE.Mesh(
+            new THREE.CylinderGeometry(zone.radius * 0.78, zone.radius * 0.78, 0.04, 28),
+            createMaterial(zone.color, {
+                roughness: 0.92,
+                metalness: 0.04,
+                transparent: true,
+                opacity: 0.08,
+            })
+        );
+        core.position.set(zone.x, 0.05, zone.z);
+        scene.add(core);
+
+        scannerZones.push({ ...zone, ring, core, pulse: Math.random() * Math.PI * 2 });
+    }
 }
 
 function appendObstacleFromMesh(obstacles, mesh, x, z) {

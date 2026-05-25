@@ -52,6 +52,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const hazardGeo = new THREE.BoxGeometry(4.8, 0.08, 0.7);
     const tempTarget = new THREE.Vector3();
     const debugClock = { frames: 0, timer: 0 };
+    let scannerCharge = 0;
+    let activeScannerZoneId = null;
     const playerCar = createCar(CAR_MODELS[state.playerModelIndex], sharedMaterials);
     playerCar.position.set(0, 0.38, 0);
     scene.add(playerCar);
@@ -116,6 +118,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.time.timer = 72;
         state.time.cycle = 0;
         state.district = getDistrictAt(0, 0);
+        scannerCharge = 0;
+        activeScannerZoneId = null;
         setStatus(options.showMenu ? "Waehle einen Run oder pruefe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
         hideGameOver(ui);
         clearMissionBoss();
@@ -168,6 +172,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updatePlayer(dt, input);
         updateMission(dt);
         updateDistrict();
+        updateScannerZones(dt);
         updateTimeOfDay(dt);
         updateWeather(dt);
         updateWorldEvents(dt);
@@ -511,7 +516,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             car.mesh.position.set(car.x, 0.35, car.z);
             if (distanceSq(state.player.x, state.player.z, car.x, car.z) < CONFIG.traffic.collisionRadius * CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
                 car.cooldown = 1.1;
-            damagePlayer(Math.abs(state.player.speed) * 0.55 + 5, "crash");
+                damagePlayer(Math.abs(state.player.speed) * 0.55 + 5, "crash");
                 audio?.crash();
                 state.player.speed *= 0.42;
                 spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
@@ -520,9 +525,40 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
+    function updateScannerZones(dt) {
+        if (!world.scannerZones?.length) return;
+        let insideZone = null;
+        for (const zone of world.scannerZones) {
+            zone.pulse += dt * 2;
+            if (zone.ring?.material) zone.ring.material.opacity = 0.3 + Math.sin(zone.pulse) * 0.08;
+            if (zone.core?.material) zone.core.material.opacity = 0.07 + Math.sin(zone.pulse * 1.2) * 0.02;
+            if (distanceSq(state.player.x, state.player.z, zone.x, zone.z) < zone.radius * zone.radius) insideZone = zone;
+        }
+
+        if (!insideZone) {
+            scannerCharge = Math.max(0, scannerCharge - dt * 0.4);
+            activeScannerZoneId = null;
+            return;
+        }
+
+        if (activeScannerZoneId !== insideZone.label) {
+            activeScannerZoneId = insideZone.label;
+            setStatus(`Scanner-Zone: ${insideZone.label}. Dispatch trackt dein Signal schneller.`, 1.9);
+        }
+
+        scannerCharge += dt * insideZone.heatBoost * (state.time.phase === "night" ? 0.34 : 0.24);
+        if (scannerCharge >= 1) {
+            scannerCharge = 0;
+            updateWanted(Math.min(5, state.wanted.level + 1));
+            spawnParticle(insideZone.x, insideZone.z, insideZone.color ?? "#63c8ff", 16);
+            setStatus(`Scanner-Treffer: ${insideZone.label} hebt Heat an.`, 1.6);
+        }
+    }
+
     function updatePolice(dt) {
         const heatTier = getHeatTier();
         const visibilityFactor = getPoliceVisibilityFactor();
+        const retiredAgents = [];
         state.wanted.emp = Math.max(0, state.wanted.emp - dt);
         const targetPolice = Math.max(0, heatTier.police - (state.wanted.emp > 0 ? 6 : 0));
         while (police.length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
@@ -532,6 +568,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (const agent of police) {
             agent.cooldown = Math.max(0, agent.cooldown - dt);
             agent.closeCooldown = Math.max(0, agent.closeCooldown - dt);
+            agent.deployCooldown = Math.max(0, (agent.deployCooldown ?? 0) - dt);
             const dx = state.player.x - agent.x;
             const dz = state.player.z - agent.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
@@ -557,22 +594,29 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 agent.state = "search";
             }
 
-            const flank = agent.role === "flank" ? (agent.side || 1) * 7 : 0;
-            const intercept = agent.role === "intercept" ? Math.min(12, Math.abs(state.player.speed) * 0.7) : 0;
             const playerForwardX = Math.sin(state.player.rotation);
             const playerForwardZ = Math.cos(state.player.rotation);
             const playerSideX = Math.cos(state.player.rotation);
             const playerSideZ = -Math.sin(state.player.rotation);
-            const targetX = (agent.state === "chase" ? state.player.x : agent.lastX) + playerForwardX * intercept + playerSideX * flank;
-            const targetZ = (agent.state === "chase" ? state.player.z : agent.lastZ) + playerForwardZ * intercept + playerSideZ * flank;
+            const baseTargetX = agent.state === "chase" ? state.player.x : agent.lastX;
+            const baseTargetZ = agent.state === "chase" ? state.player.z : agent.lastZ;
+            const intercept = agent.unitType === "suv"
+                ? Math.min(14, Math.abs(state.player.speed) * 0.85)
+                : agent.unitType === "motorcycle"
+                    ? Math.min(9, Math.abs(state.player.speed) * 0.4)
+                    : agent.unitType === "van"
+                        ? 6
+                        : Math.min(10, Math.abs(state.player.speed) * 0.55);
+            const flank = agent.unitType === "motorcycle" ? (agent.side || 1) * 5.5 : 0;
+            const targetX = baseTargetX + playerForwardX * intercept + playerSideX * flank;
+            const targetZ = baseTargetZ + playerForwardZ * intercept + playerSideZ * flank;
             const targetAngle = Math.atan2(targetX - agent.x, targetZ - agent.z);
             let diff = targetAngle - agent.rotation;
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
-            agent.rotation += Math.sign(diff) * Math.min(Math.abs(diff), (2.1 + state.wanted.level * 0.35) * dt);
-            agent.targetSpeed = agent.state === "chase"
-                ? 11 + state.wanted.level * 1.6 + (agent.heavy ? -1 : 1.2) + (state.time.phase === "night" ? 0.8 : 0)
-                : 8;
+            const turnRate = agent.unitType === "motorcycle" ? 3.2 : agent.unitType === "suv" ? 1.85 : agent.unitType === "van" ? 1.55 : 2.35;
+            agent.rotation += Math.sign(diff) * Math.min(Math.abs(diff), (turnRate + state.wanted.level * 0.2) * dt);
+            agent.targetSpeed = getPoliceTargetSpeed(agent);
             agent.speed += (agent.targetSpeed - agent.speed) * dt * 2.4;
 
             const next = {
@@ -580,26 +624,49 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 z: agent.z + Math.cos(agent.rotation) * agent.speed * dt,
             };
             if (pushOutBuildings(world, next, 1.25) || obstacleAt(world, next.x, next.z, 1.15)) {
-                agent.rotation += 1.6;
-                agent.speed *= 0.55;
+                agent.rotation += agent.unitType === "motorcycle" ? 2.6 : 1.6;
+                if (agent.unitType === "motorcycle" && Math.random() < 0.25) {
+                    retiredAgents.push(agent);
+                    spawnParticle(next.x, next.z, "#f7fbff", 10);
+                    continue;
+                }
+                agent.speed *= agent.unitType === "suv" ? 0.68 : 0.55;
             }
             agent.x = clamp(next.x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
             agent.z = clamp(next.z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
             agent.mesh.position.set(agent.x, 0.37, agent.z);
             agent.mesh.rotation.y = agent.rotation;
 
+            if (agent.unitType === "van" && agent.state === "chase" && dist < 34 && state.roadblockCooldown <= 0 && agent.deployCooldown <= 0) {
+                spawnRoadblock({ sourceAgent: agent, tactical: true });
+                agent.deployCooldown = 10;
+            }
+
             if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
-                damagePlayer((Math.abs(agent.speed) + Math.abs(state.player.speed)) * 0.9, "crash");
+                const crashDamage = (Math.abs(agent.speed) + Math.abs(state.player.speed)) * (agent.unitType === "suv" ? 1.08 : 0.9);
+                damagePlayer(crashDamage, "crash");
                 audio?.crash();
-                state.player.speed *= 0.45;
-                agent.speed *= 0.35;
+                state.player.speed *= agent.unitType === "suv" ? 0.34 : 0.45;
+                agent.speed *= agent.unitType === "motorcycle" ? 0.12 : 0.35;
                 spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
+                if (agent.unitType === "motorcycle" && Math.abs(state.player.speed) > 8) {
+                    retiredAgents.push(agent);
+                    setStatus("Motorrad-Einheit ausgeschaltet.", 1.2);
+                }
+            }
+        }
+
+        for (const agent of retiredAgents) {
+            const agentIndex = police.indexOf(agent);
+            if (agentIndex >= 0) {
+                scene.remove(agent.mesh);
+                police.splice(agentIndex, 1);
             }
         }
 
         if (state.wanted.level > 0 && !near) {
-            state.wanted.decay += dt;
+            state.wanted.decay += dt * (isInEscapeCover(state.player.x, state.player.z) ? 1.45 : 1);
             if (state.wanted.decay > CONFIG.police.decayDelay) {
                 state.wanted.decay = 0;
                 updateWanted(state.wanted.level - 1);
@@ -643,7 +710,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.roadblockCooldown <= 0
         ) {
             if (state.wanted.level >= 4 && Math.random() < 0.45) spawnSpikeStrip();
-            else spawnRoadblock();
+            else spawnRoadblock({ tactical: true });
             state.roadblockCooldown = Math.max(3.5, CONFIG.police.roadblockCooldown - state.wanted.level * 0.55);
         }
     }
@@ -710,8 +777,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         helicopter.userData.rotor.rotation.y += dt * 18;
 
         const inCone = distanceSq(state.player.x, state.player.z, state.helicopter.x, state.helicopter.z) < 15 * 15;
+        const heliCoverFactor = getHeliCoverFactor();
         const searchlightPressure = state.time.phase === "night" ? 0.4 : 0.28;
-        state.helicopter.pressure = clamp(state.helicopter.pressure + (inCone ? dt * searchlightPressure : -dt * 0.18), 0, 1);
+        state.helicopter.pressure = clamp(
+            state.helicopter.pressure + (inCone ? dt * searchlightPressure * heliCoverFactor : -dt * (heliCoverFactor < 0.8 ? 0.26 : 0.18)),
+            0,
+            1
+        );
         state.helicopter.cooldown = Math.max(0, state.helicopter.cooldown - dt);
         if (state.helicopter.pressure >= 1 && state.helicopter.cooldown <= 0) {
             state.helicopter.cooldown = 3.4;
@@ -1221,10 +1293,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function spawnPolice(near = true) {
         if (police.length >= CONFIG.police.maxCount) return;
-        const heavy = state.wanted.level >= 4 && Math.random() < 0.45;
-        const model = heavy
-            ? { ...CAR_MODELS[1], color: "#e9eef4", trim: "#182a46", maxSpeed: 17, acceleration: 22, turn: 3.05 }
-            : { ...CAR_MODELS[0], color: "#f4f7fb", trim: "#1c4274", maxSpeed: 19, acceleration: 24, turn: 3.45 };
+        const unitType = pickPoliceUnitType();
+        const model = createPoliceUnitModel(unitType);
         const mesh = createCar(model, sharedMaterials, { police: true });
         const angle = Math.random() * Math.PI * 2;
         const dist = near ? CONFIG.police.spawnDistance + Math.random() * 28 : CONFIG.map.size * 0.45;
@@ -1245,23 +1315,21 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state: "search",
             lastX: state.player.x,
             lastZ: state.player.z,
-            role: state.wanted.level >= 3 ? ["chase", "flank", "intercept"][Math.floor(Math.random() * 3)] : "chase",
+            role: unitType === "suv" ? "ram" : unitType === "motorcycle" ? "rapid" : unitType === "van" ? "blocker" : "direct",
             side: Math.random() < 0.5 ? -1 : 1,
-            heavy,
+            heavy: unitType === "suv" || unitType === "van",
+            unitType,
             cooldown: 0,
             closeCooldown: 0,
+            deployCooldown: unitType === "van" ? 3 : 0,
         });
     }
 
-    function spawnRoadblock() {
-        const forwardX = Math.sin(state.player.rotation);
-        const forwardZ = Math.cos(state.player.rotation);
-        const dist = 28 + Math.random() * 22;
-        const axis = Math.abs(forwardX) > Math.abs(forwardZ) ? "x" : "z";
-        let x = state.player.x + forwardX * dist;
-        let z = state.player.z + forwardZ * dist;
-        if (axis === "x") z = snapStreet(z);
-        else x = snapStreet(x);
+    function spawnRoadblock(options = {}) {
+        const target = getRoadblockPlacementTarget(options);
+        const axis = target.axis;
+        let x = target.x;
+        let z = target.z;
         x = clamp(x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
         z = clamp(z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
 
@@ -1275,8 +1343,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             radius: 3.9,
             life: 16 + state.wanted.level * 2,
             cooldown: 0,
+            tactical: Boolean(options.tactical),
         });
-        setStatus("Dispatch: Roadblock voraus.", 1.7);
+        setStatus(options.sourceAgent?.unitType === "van" ? "Police Van: Sperre auf deiner Linie." : "Dispatch: Roadblock voraus.", 1.7);
     }
 
     function spawnSpikeStrip() {
@@ -1393,6 +1462,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.helicopter.cooldown = 8;
         }
         state.wanted.emp = 5;
+        scannerCharge = 0;
+        activeScannerZoneId = null;
         state.cameraShake = Math.max(state.cameraShake, 0.36);
         spawnParticle(x, z, "#f7fbff", 42);
         setStatus(`EMP gezuendet. ${disabled} Einheiten deaktiviert.`, 2);
@@ -2295,10 +2366,120 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function getPoliceVisibilityFactor() {
         let factor = 1;
-        if (state.time.phase === "night") factor += 0.18;
-        if (state.weather.mode === "fog") factor -= 0.28;
-        if (state.weather.mode === "storm") factor -= 0.12;
-        return clamp(factor, 0.7, 1.3);
+        if (state.time.phase === "night") factor += 0.14;
+        if (state.weather.mode === "fog") factor -= 0.34;
+        if (state.weather.mode === "storm") factor -= 0.16;
+        if (isInEscapeCover(state.player.x, state.player.z)) factor -= 0.16;
+        if (activeScannerZoneId) factor += 0.12;
+        if (state.helicopter.active && distanceSq(state.player.x, state.player.z, state.helicopter.x, state.helicopter.z) < 15 * 15) factor += 0.22;
+        return clamp(factor, 0.55, 1.45);
+    }
+
+    function pickPoliceUnitType() {
+        const heat = state.wanted.level;
+        const roll = Math.random();
+        if (heat >= 4 && roll < 0.24) return "van";
+        if (heat >= 3 && roll < 0.52) return "suv";
+        if (heat >= 2 && roll < 0.78) return "motorcycle";
+        return "patrol";
+    }
+
+    function createPoliceUnitModel(unitType) {
+        if (unitType === "suv") {
+            return { ...CAR_MODELS[1], color: "#e9eef4", trim: "#182a46", name: "Pursuit SUV", maxSpeed: 16.8, acceleration: 22, turn: 2.95 };
+        }
+        if (unitType === "motorcycle") {
+            return { ...CAR_MODELS[2], color: "#f4f7fb", trim: "#18324f", name: "Interceptor Bike", width: 0.96, length: 2.75, height: 0.42, maxSpeed: 22, acceleration: 28, turn: 4.8, roof: "sport" };
+        }
+        if (unitType === "van") {
+            return { ...CAR_MODELS[3], color: "#d9e1eb", trim: "#1a2b45", name: "Blockade Van", maxSpeed: 14.8, acceleration: 18.5, turn: 2.45 };
+        }
+        return { ...CAR_MODELS[0], color: "#f4f7fb", trim: "#1c4274", name: "Patrol Cruiser", maxSpeed: 19.2, acceleration: 24, turn: 3.4 };
+    }
+
+    function getPoliceTargetSpeed(agent) {
+        if (agent.state !== "chase") return agent.unitType === "motorcycle" ? 9.5 : 8;
+        if (agent.unitType === "motorcycle") return 13.5 + state.wanted.level * 1.35 + (state.time.phase === "night" ? 0.8 : 0);
+        if (agent.unitType === "suv") return 10.8 + state.wanted.level * 1.1;
+        if (agent.unitType === "van") return 9.2 + state.wanted.level * 0.85;
+        return 11.5 + state.wanted.level * 1.4 + (state.time.phase === "night" ? 0.8 : 0);
+    }
+
+    function getRoadblockPlacementTarget(options = {}) {
+        const missionTarget = getMissionNavigationTarget();
+        if (options.sourceAgent) {
+            const axis = Math.abs(Math.sin(options.sourceAgent.rotation)) > Math.abs(Math.cos(options.sourceAgent.rotation)) ? "x" : "z";
+            return snapRoadblockTarget(options.sourceAgent.x, options.sourceAgent.z, axis);
+        }
+        if (options.tactical && missionTarget && Math.random() < 0.45) {
+            const axis = Math.abs(state.player.x - missionTarget.x) > Math.abs(state.player.z - missionTarget.z) ? "x" : "z";
+            return snapRoadblockTarget(missionTarget.x, missionTarget.z, axis);
+        }
+        const forwardX = Math.sin(state.player.rotation);
+        const forwardZ = Math.cos(state.player.rotation);
+        const dist = 28 + Math.random() * 22;
+        const rawX = state.player.x + forwardX * dist;
+        const rawZ = state.player.z + forwardZ * dist;
+        const axis = Math.abs(forwardX) > Math.abs(forwardZ) ? "x" : "z";
+        return snapRoadblockTarget(rawX, rawZ, axis);
+    }
+
+    function snapRoadblockTarget(x, z, axis) {
+        let nextX = x;
+        let nextZ = z;
+        if (axis === "x") nextZ = snapStreet(z);
+        else nextX = snapStreet(x);
+        if (Math.random() < 0.45) {
+            nextX = snapStreet(nextX);
+            nextZ = snapStreet(nextZ);
+        }
+        return { x: nextX, z: nextZ, axis };
+    }
+
+    function getMissionNavigationTarget() {
+        if (state.mission.type === "checkpoint") return state.mission.route[state.mission.routeIndex] ?? state.mission.to;
+        return state.mission.to ?? state.mission.from ?? null;
+    }
+
+    function isInEscapeCover(x, z) {
+        if (isNearCraneCover(x, z)) return true;
+        const district = getDistrictAt(x, z);
+        if (district.id !== "downtown" && district.id !== "industrial") return false;
+        for (const building of world.buildings) {
+            if ((building.h ?? 0) < 12) continue;
+            const edgeDx = Math.max(0, Math.abs(x - building.x) - building.hw);
+            const edgeDz = Math.max(0, Math.abs(z - building.z) - building.hd);
+            const edgeDistance = Math.sqrt(edgeDx * edgeDx + edgeDz * edgeDz);
+            if (edgeDistance < 3.4) return true;
+        }
+        return false;
+    }
+
+    function isNearCraneCover(x, z) {
+        for (const obstacle of world.obstacles) {
+            if (obstacle.destroyed) continue;
+            if (obstacle.type !== "crane" && obstacle.type !== "dockContainer") continue;
+            if (distanceSq(x, z, obstacle.x, obstacle.z) < 7.2 * 7.2) return true;
+        }
+        return false;
+    }
+
+    function getHeliCoverFactor() {
+        if (isNearCraneCover(state.player.x, state.player.z)) return 0.42;
+        if (isInEscapeCover(state.player.x, state.player.z)) return 0.62;
+        if (state.player.inShortcut) return 0.82;
+        return 1;
+    }
+
+    function scrambleNearbyPolice(x, z, radius = 24) {
+        const radiusSq = radius * radius;
+        for (const agent of police) {
+            if (distanceSq(x, z, agent.x, agent.z) >= radiusSq) continue;
+            agent.state = "search";
+            agent.lastX = x + (Math.random() - 0.5) * 8;
+            agent.lastZ = z + (Math.random() - 0.5) * 8;
+            agent.speed *= 0.78;
+        }
     }
 
     function addAmbientHeadlights(mesh, model, color = "#fff6a8") {
@@ -2393,6 +2574,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         if (obstacle.type === "fence") {
             spawnFenceGapDebris(obstacle);
+            if (state.wanted.level > 0) {
+                scrambleNearbyPolice(obstacle.x, obstacle.z, 26);
+                state.wanted.decay += 1.4;
+                setStatus("Zaun durchbrochen. Sichtlinie kurz gestoert.", 1.4);
+            }
             return;
         }
         if (obstacle.type === "dumpster" && impact > 11) {

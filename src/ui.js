@@ -478,6 +478,7 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
         ctx.stroke();
     }
 
+    for (const zone of world.scannerZones ?? []) drawMapScannerZone(ctx, state, cx, cy, scale, width, height, zone);
     for (const poi of world.pointsOfInterest) drawMapDot(ctx, state, cx, cy, scale, width, height, poi.x, poi.z, poi.color, 4.5);
     for (const car of traffic) drawMapDot(ctx, state, cx, cy, scale, width, height, car.x, car.z, "#e8e2ce", 2);
     for (const agent of police) drawMapDot(ctx, state, cx, cy, scale, width, height, agent.x, agent.z, "#ff5a4c", 3);
@@ -521,6 +522,21 @@ function drawMapRing(ctx, state, cx, cy, scale, width, height, x, z, color) {
     ctx.beginPath();
     ctx.arc(mx, my, 8, 0, Math.PI * 2);
     ctx.stroke();
+}
+
+function drawMapScannerZone(ctx, state, cx, cy, scale, width, height, zone) {
+    const mx = cx + (zone.x - state.player.x) * scale;
+    const my = cy + (zone.z - state.player.z) * scale;
+    const radius = zone.radius * scale;
+    if (mx < -radius || mx > width + radius || my < -radius || my > height + radius) return;
+    const color = zone.color ?? "#63c8ff";
+    ctx.strokeStyle = color.replace("#", "#");
+    ctx.globalAlpha = 0.24;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(mx, my, Math.max(4, radius), 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.globalAlpha = 1;
 }
 
 function formatMissionBonus(mission) {
