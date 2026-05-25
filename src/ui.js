@@ -16,7 +16,7 @@ export function mountHud(root) {
                     </div>
                     <div class="label" id="nearestPoi">Downtown | 0 m</div>
                     <div class="meta-row">
-                        <span id="districtName">Old Harbor</span>
+                        <span id="districtName">Downtown</span>
                         <strong id="weatherName">Klar</strong>
                     </div>
                 </section>

@@ -56,10 +56,10 @@ export const HEAT_TIERS = [
 ];
 
 export const DISTRICTS = [
-    { id: "northwest", name: "Old Harbor", x: -1, z: -1, color: "#4f6f8f", bonus: "Cash" },
-    { id: "northeast", name: "Glass Mile", x: 1, z: -1, color: "#63c8ff", bonus: "Tempo" },
-    { id: "southwest", name: "Brickworks", x: -1, z: 1, color: "#c9a5ff", bonus: "Teile" },
-    { id: "southeast", name: "Sunset Park", x: 1, z: 1, color: "#57d68d", bonus: "Nitro" },
+    { id: "harbor", name: "Hafenzone", x: -1, z: -1, color: "#5a9bb0", bonus: "Events", traffic: 0.9 },
+    { id: "park", name: "Park", x: 1, z: -1, color: "#78c86c", bonus: "Nitro", traffic: 0.45 },
+    { id: "industrial", name: "Industrie", x: -1, z: 1, color: "#d39a54", bonus: "Teile", traffic: 1.1 },
+    { id: "downtown", name: "Downtown", x: 1, z: 1, color: "#6ec3ff", bonus: "Cash", traffic: 1.55 },
 ];
 
 export const WEATHER_MODES = {

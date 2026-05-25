@@ -815,20 +815,69 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function spawnTraffic() {
-        const model = Math.random() < 0.3
-            ? { ...CAR_MODELS[1], name: "Taxi", color: "#ffc23e", trim: "#181511" }
-            : CAR_MODELS[Math.floor(Math.random() * CAR_MODELS.length)];
+        const district = chooseTrafficDistrict();
+        const model = createTrafficModelForDistrict(district);
         const mesh = createCar(model, sharedMaterials, { taxi: model.name === "Taxi" });
         const axis = Math.random() < 0.5 ? "x" : "z";
-        const street = CONFIG.map.streets[Math.floor(Math.random() * CONFIG.map.streets.length)];
-        const pos = (Math.random() - 0.5) * CONFIG.map.size * 0.9;
+        const streetOptions = getDistrictTrafficStreets(axis, district);
+        const street = streetOptions[Math.floor(Math.random() * streetOptions.length)];
+        const pos = getDistrictTrafficPosition(axis, district);
         const direction = Math.random() < 0.5 ? -1 : 1;
         const x = axis === "x" ? pos : street;
         const z = axis === "z" ? pos : street;
         mesh.position.set(x, 0.35, z);
         mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
         scene.add(mesh);
-        traffic.push({ mesh, x, z, axis, direction, speed: 4 + Math.random() * 5, model, cooldown: 0 });
+        const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
+        traffic.push({ mesh, x, z, axis, direction, speed: baseSpeed + Math.random() * 3.2, model, cooldown: 0, districtId: district.id });
+    }
+
+    function chooseTrafficDistrict() {
+        const totalWeight = DISTRICTS.reduce((sum, district) => sum + (district.traffic ?? 1), 0);
+        let roll = Math.random() * totalWeight;
+        for (const district of DISTRICTS) {
+            roll -= district.traffic ?? 1;
+            if (roll <= 0) return district;
+        }
+        return DISTRICTS[DISTRICTS.length - 1];
+    }
+
+    function createTrafficModelForDistrict(district) {
+        if (district.id === "downtown") {
+            if (Math.random() < 0.38) return { ...CAR_MODELS[1], name: "Taxi", color: "#ffc23e", trim: "#181511" };
+            return Math.random() < 0.5 ? CAR_MODELS[0] : CAR_MODELS[2];
+        }
+        if (district.id === "industrial") {
+            return Math.random() < 0.55 ? CAR_MODELS[3] : CAR_MODELS[1];
+        }
+        if (district.id === "harbor") {
+            return Math.random() < 0.5
+                ? { ...CAR_MODELS[3], color: "#6f8ea5", trim: "#1a2128", name: "Dock Van" }
+                : { ...CAR_MODELS[0], color: "#4d6e84", trim: "#162129", name: "Dock Runner" };
+        }
+        return Math.random() < 0.7
+            ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Shuttle" }
+            : { ...CAR_MODELS[2], color: "#b8e2ff", trim: "#11354a", name: "Cycle Lane" };
+    }
+
+    function getDistrictTrafficStreets(axis, district) {
+        const options = CONFIG.map.streets.filter((street) => {
+            if (axis === "x") return district.z < 0 ? street <= 0 : street >= 0;
+            return district.x < 0 ? street <= 0 : street >= 0;
+        });
+        return options.length > 0 ? options : CONFIG.map.streets;
+    }
+
+    function getDistrictTrafficPosition(axis, district) {
+        const limit = CONFIG.map.size * 0.46;
+        if (axis === "x") {
+            return district.x < 0
+                ? -Math.random() * limit
+                : Math.random() * limit;
+        }
+        return district.z < 0
+            ? -Math.random() * limit
+            : Math.random() * limit;
     }
 
     function spawnPolice(near = true) {

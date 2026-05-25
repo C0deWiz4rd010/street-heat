@@ -15,6 +15,7 @@ const { createInitialState } = await import("../src/state.js");
 
 assert.equal(new Set(CAR_MODELS.map((car) => car.id)).size, CAR_MODELS.length, "car ids must be unique");
 assert.equal(new Set(DISTRICTS.map((district) => district.id)).size, DISTRICTS.length, "district ids must be unique");
+assert.ok(DISTRICTS.every((district) => district.traffic > 0), "district traffic weights must stay positive");
 assert.equal(HEAT_TIERS.length, 6, "heat tiers should cover levels 0-5");
 assert.ok(Object.values(WEATHER_MODES).every((weather) => weather.grip > 0 && weather.grip <= 1), "weather grip values must be usable");
 assert.ok(WORLD_EVENTS.every((event) => event.score > 0), "world events need score rewards");
