@@ -280,9 +280,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const weatherGrip = WEATHER_MODES[state.weather.mode]?.grip ?? 1;
         const mass = model.mass ?? 1.0;
         const maxSpeed = model.maxSpeed * (1 + engineLevel * 0.075) + (inShortcut ? district.shortcutBoost ?? 0 : 0);
-        const acceleration = model.acceleration * (1 + engineLevel * 0.085) * (0.92 + weatherGrip * 0.08);
+        const acceleration = (model.acceleration / Math.sqrt(mass)) * (1 + engineLevel * 0.085) * (0.92 + weatherGrip * 0.08);
         const turnPower = model.turn * (1 + gripLevel * 0.045) * weatherGrip * (inShortcut ? 1.08 : 1);
-        const brakePower = (8.5 + gripLevel * 1.9) * weatherGrip;
+        const brakePower = (8.5 + gripLevel * 1.9) * (model.brakeFactor ?? 0.68) * weatherGrip;
         const nitroMax = getNitroMax();
         const keys = input.keys;
         const forward = keys.w || keys.arrowup ? 1 : 0;
@@ -327,7 +327,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         fwdSpeed = clamp(fwdSpeed, -boostedMax * CONFIG.player.reverseFactor, boostedMax);
 
         // Drift state — builds up smoothly, falls off with release
-        const isDrifting = handbrake && Math.abs(fwdSpeed) > 5 && Math.abs(turnInput) > 0;
+        const driftSpeedThreshold = (model.driftThreshold ?? 0.38) * maxSpeed;
+        const isDrifting = handbrake && Math.abs(fwdSpeed) > driftSpeedThreshold && Math.abs(turnInput) > 0;
         const wasDrifting = player.drift > 0.5;
         player.drift = isDrifting
             ? Math.min(1, player.drift + dt * 4.5)
@@ -414,14 +415,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (hitBuilding || hitObstacle) {
             const impactMag = player.speedMag;
             const obstacleDamping = destroyedReaction?.speedDamping ?? hitObstacle?.speedDamping ?? 0.34;
-            const dampFactor = hitBuilding ? 0.32 : obstacleDamping;
+            const massRetention = Math.min(0.88, 0.28 + mass * 0.28);
+            const dampFactor = hitBuilding ? Math.min(0.52, 0.22 + mass * 0.18) : Math.min(obstacleDamping + mass * 0.14, 0.72);
             player.vx *= dampFactor;
             player.vz *= dampFactor;
             player.speed = newFwdX * player.vx + newFwdZ * player.vz;
             player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
             if (impactMag > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
-                damagePlayer(impactMag * (hitBuilding ? 0.8 : obstacleDamageScale) / mass, "crash");
+                damagePlayer(impactMag * (hitBuilding ? 0.8 : obstacleDamageScale) / (mass * 0.75 + 0.25), "crash");
                 state.cameraShake = Math.min(1, Math.max(impactMag * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
                 spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : (destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d"), destroyedReaction?.particleCount ?? 18);
             }
@@ -608,11 +610,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
             if (distToPlayer < CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
                 car.cooldown = 1.1;
-                const impactDamage = playerSpeedMag * (0.55 / mass) + (mass > 1.2 ? 3 : 5);
+                const trafficMass = car.model?.mass ?? 1.0;
+                const massRatio = trafficMass / mass;
+                const impactDamage = playerSpeedMag * (0.45 * massRatio) + (massRatio > 1.1 ? 2.5 : 5.5) / mass;
                 damagePlayer(impactDamage, "crash");
                 audio?.crash();
-                state.player.vx *= mass > 1.2 ? 0.55 : 0.42;
-                state.player.vz *= mass > 1.2 ? 0.55 : 0.42;
+                const velocityRetain = Math.min(0.72, 0.34 + mass * 0.22);
+                state.player.vx *= velocityRetain;
+                state.player.vz *= velocityRetain;
                 state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
                 state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
                 spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
