@@ -80,6 +80,40 @@ export function createWorld(scene, sharedMaterials) {
         objects.push(marker);
     }
 
+    // Harbor: large water base plane under the entire quadrant
+    const harborBaseMat = new THREE.MeshStandardMaterial({ color: "#14405e", roughness: 0.12, metalness: 0.55, transparent: true, opacity: 0.82 });
+    const harborBase = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 4, 0.07, CONFIG.map.size / 2 - 4), harborBaseMat);
+    harborBase.position.set(-CONFIG.map.size / 4, -0.08, -CONFIG.map.size / 4);
+    harborBase.receiveShadow = true;
+    scene.add(harborBase);
+    objects.push(harborBase);
+
+    // Downtown: central landmark tower (skyline anchor)
+    const downtownTower = createLandmarkTower(scene, 38, 38);
+    objects.push(downtownTower);
+    buildings.push({ x: 38, z: 38, hw: 5.5, hd: 5.5, h: 52 });
+
+    // Industrial: tall smokestack with point light
+    createSmokestack(scene, objects, -38, 38);
+
+    // Park: large central lake
+    const parkLakeMat = new THREE.MeshStandardMaterial({ color: "#1c4d72", roughness: 0.08, metalness: 0.45, transparent: true, opacity: 0.84 });
+    const parkLake = new THREE.Mesh(new THREE.CylinderGeometry(10, 10.5, 0.1, 32), parkLakeMat);
+    parkLake.scale.z = 0.72;
+    parkLake.position.set(35, -0.02, -35);
+    parkLake.receiveShadow = true;
+    scene.add(parkLake);
+    objects.push(parkLake);
+
+    // Harbor: extra dock water accent strips near edges
+    const dockWaterMat = new THREE.MeshStandardMaterial({ color: "#0f3550", roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.9 });
+    const dockWaterEast = new THREE.Mesh(new THREE.BoxGeometry(6, 0.07, CONFIG.map.size / 2 - 2), dockWaterMat.clone());
+    dockWaterEast.position.set(-CONFIG.map.size / 2 + 3, -0.06, -CONFIG.map.size / 4);
+    scene.add(dockWaterEast);
+    const dockWaterNorth = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 2, 0.07, 6), dockWaterMat.clone());
+    dockWaterNorth.position.set(-CONFIG.map.size / 4, -0.06, -CONFIG.map.size / 2 + 3);
+    scene.add(dockWaterNorth);
+
     createScannerZones(scene, scannerZones);
 
     return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones };
@@ -921,6 +955,116 @@ function createScannerZones(scene, scannerZones) {
 
         scannerZones.push({ ...zone, ring, core, pulse: Math.random() * Math.PI * 2 });
     }
+}
+
+function createLandmarkTower(scene, x, z) {
+    const group = new THREE.Group();
+
+    // Wide base section
+    const base = new THREE.Mesh(
+        new THREE.BoxGeometry(9.5, 18, 9.5),
+        new THREE.MeshStandardMaterial({ color: "#1a2438", roughness: 0.32, metalness: 0.55 })
+    );
+    base.position.y = 9;
+    base.castShadow = true;
+    base.receiveShadow = true;
+    group.add(base);
+
+    // Mid section with glass
+    const mid = new THREE.Mesh(
+        new THREE.BoxGeometry(7, 16, 7),
+        new THREE.MeshStandardMaterial({ color: "#1e3558", roughness: 0.22, metalness: 0.65 })
+    );
+    mid.position.y = 26;
+    mid.castShadow = true;
+    group.add(mid);
+
+    // Glass facade accents
+    for (const side of [-1, 1]) {
+        const glass = new THREE.Mesh(
+            new THREE.BoxGeometry(5.6, 14, 0.1),
+            new THREE.MeshStandardMaterial({ color: "#63c8ff", roughness: 0.08, metalness: 0.72, emissive: "#1a4d6e", emissiveIntensity: 0.3, transparent: true, opacity: 0.72 })
+        );
+        glass.position.set(0, 26, side * 3.55);
+        group.add(glass);
+        const glassX = glass.clone();
+        glassX.position.set(side * 3.55, 26, 0);
+        glassX.rotation.y = Math.PI / 2;
+        group.add(glassX);
+    }
+
+    // Narrow upper tower
+    const top = new THREE.Mesh(
+        new THREE.BoxGeometry(4, 14, 4),
+        new THREE.MeshStandardMaterial({ color: "#10192e", roughness: 0.18, metalness: 0.72 })
+    );
+    top.position.y = 41;
+    top.castShadow = true;
+    group.add(top);
+
+    // Neon crown — red emissive ring
+    const crownMat = createMaterial("#ff3055", { emissive: "#ff3055", emissiveIntensity: 1.2, roughness: 0.14, metalness: 0.4 });
+    const crown = new THREE.Mesh(new THREE.BoxGeometry(5.2, 0.6, 5.2), crownMat);
+    crown.position.y = 48.5;
+    group.add(crown);
+
+    // Spire
+    const spire = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.15, 0.5, 7, 8),
+        createMaterial("#e0e8f0", { roughness: 0.24, metalness: 0.68 })
+    );
+    spire.position.y = 52.5;
+    spire.castShadow = true;
+    group.add(spire);
+
+    // Point light at crown
+    const crownLight = new THREE.PointLight("#ff3055", 1.4, 48);
+    crownLight.position.y = 50;
+    group.add(crownLight);
+
+    group.position.set(x, 0, z);
+    scene.add(group);
+    return group;
+}
+
+function createSmokestack(scene, objects, x, z) {
+    const group = new THREE.Group();
+
+    // Chimney body
+    const chimney = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.05, 1.55, 26, 14),
+        createMaterial("#2a2522", { roughness: 0.82, metalness: 0.12 })
+    );
+    chimney.position.y = 13;
+    chimney.castShadow = true;
+    group.add(chimney);
+
+    // Red warning band
+    const band = new THREE.Mesh(
+        new THREE.CylinderGeometry(1.12, 1.12, 0.6, 14),
+        createMaterial("#c23030", { roughness: 0.42, metalness: 0.18 })
+    );
+    band.position.y = 23.5;
+    group.add(band);
+
+    // Warning light at top
+    const warningLight = new THREE.PointLight("#ff4444", 0.7, 28);
+    warningLight.position.y = 28;
+    group.add(warningLight);
+
+    // Base platform
+    const basePlatform = new THREE.Mesh(
+        new THREE.BoxGeometry(5.5, 1.8, 5.5),
+        createMaterial("#38322e", { roughness: 0.78, metalness: 0.14 })
+    );
+    basePlatform.position.y = 0.9;
+    basePlatform.castShadow = true;
+    group.add(basePlatform);
+
+    group.position.set(x, 0, z);
+    scene.add(group);
+    objects.push(group);
+    return group;
 }
 
 function appendObstacleFromMesh(obstacles, mesh, x, z) {
