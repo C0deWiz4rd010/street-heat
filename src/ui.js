@@ -34,10 +34,9 @@ export function mountHud(root) {
             </div>
 
             <div class="center-strip">
-                <div class="chip">
+                <div class="tacho-chip">
                     <span class="label">Tempo</span>
-                    <strong id="speed">0</strong>
-                    <span class="label">km/h</span>
+                    <canvas id="tacho" width="120" height="62"></canvas>
                 </div>
                 <div class="chip">
                     <span class="label">Heat</span>
@@ -162,6 +161,7 @@ export function mountHud(root) {
     `;
 
     const minimap = document.getElementById("minimap");
+    const tacho = document.getElementById("tacho");
     return {
         score: document.getElementById("score"),
         bestScore: document.getElementById("bestScore"),
@@ -174,7 +174,8 @@ export function mountHud(root) {
         missionTarget: document.getElementById("missionTarget"),
         missionBonus: document.getElementById("missionBonus"),
         missionFill: document.getElementById("missionFill"),
-        speed: document.getElementById("speed"),
+        tacho,
+        tachoCtx: tacho.getContext("2d"),
         stars: document.getElementById("stars"),
         comboChip: document.getElementById("comboChip"),
         comboValue: document.getElementById("comboValue"),
@@ -227,7 +228,7 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.score.textContent = Math.round(state.score).toLocaleString("de-DE");
     ui.bestScore.textContent = Math.round(state.bestScore).toLocaleString("de-DE");
     ui.cash.textContent = `$${Math.round(state.cash).toLocaleString("de-DE")}`;
-    ui.speed.textContent = Math.round(Math.abs(player.speed) * 12);
+    renderTacho(ui, state, selectedCar);
     ui.carName.textContent = selectedCar.name;
     ui.districtName.textContent = state.district?.name ?? "Downtown";
     const timeLabel = state.time?.label ?? "Tag";
@@ -248,6 +249,7 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
         stars += `<span class="${active ? "active" : ""}">${active ? "\u2605" : "\u2606"}</span>`;
     }
     ui.stars.innerHTML = stars;
+    ui.stars.closest(".chip")?.classList.toggle("heat-critical", state.wanted.level >= 4);
     ui.comboValue.textContent = `x${state.combo.multiplier.toFixed(1)}`;
     ui.comboChip.classList.toggle("live", state.combo.timer > 0);
     ui.driftValue.textContent = Math.round(state.combo.driftScore);
@@ -299,6 +301,74 @@ export function showGameOver(ui, state) {
 
 export function hideGameOver(ui) {
     ui.gameOver.classList.remove("show");
+}
+
+function renderTacho(ui, state, carModel) {
+    const ctx = ui.tachoCtx;
+    const w = ui.tacho.width;
+    const h = ui.tacho.height;
+    ctx.clearRect(0, 0, w, h);
+
+    const speedMag = state.screen === "playing" ? (state.player.speedMag ?? Math.abs(state.player.speed)) : 0;
+    const maxSpeedKmh = carModel.maxSpeed * 12 * 1.18;
+    const kmh = Math.round(Math.abs(state.player.speed) * 12);
+    const ratio = Math.min(1, speedMag / (carModel.maxSpeed * 1.15));
+
+    const cx = w / 2;
+    const cy = h - 10;
+    const radius = 46;
+    const startAngle = Math.PI;
+    const sweepAngle = Math.PI;
+    const endAngle = startAngle + sweepAngle;
+
+    ctx.lineWidth = 7;
+    ctx.lineCap = "round";
+
+    // Track
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, endAngle);
+    ctx.stroke();
+
+    // Fill arc — color shifts red above 80%
+    const fillEnd = startAngle + sweepAngle * ratio;
+    const arcColor = ratio > 0.8
+        ? `hsl(${Math.round(16 - ratio * 16)},100%,60%)`
+        : ratio > 0.5
+            ? `hsl(${Math.round(48 - (ratio - 0.5) * 64)},100%,62%)`
+            : "#63c8ff";
+    ctx.strokeStyle = arcColor;
+    ctx.shadowBlur = ratio > 0.75 ? 14 : 0;
+    ctx.shadowColor = arcColor;
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius, startAngle, fillEnd);
+    ctx.stroke();
+    ctx.shadowBlur = 0;
+
+    // Tick marks
+    ctx.lineWidth = 2;
+    for (let index = 0; index <= 8; index += 1) {
+        const t = index / 8;
+        const angle = startAngle + sweepAngle * t;
+        const inner = index % 4 === 0 ? radius - 10 : radius - 6;
+        ctx.strokeStyle = t <= ratio ? arcColor : "rgba(255,255,255,0.28)";
+        ctx.beginPath();
+        ctx.moveTo(cx + Math.cos(angle) * inner, cy + Math.sin(angle) * inner);
+        ctx.lineTo(cx + Math.cos(angle) * (radius + 2), cy + Math.sin(angle) * (radius + 2));
+        ctx.stroke();
+    }
+
+    // Speed text
+    ctx.fillStyle = "#ffffff";
+    ctx.font = "900 20px 'Segoe UI', system-ui, sans-serif";
+    ctx.textAlign = "center";
+    ctx.textBaseline = "bottom";
+    ctx.fillText(kmh, cx, cy + 2);
+
+    ctx.fillStyle = "rgba(245,247,251,0.55)";
+    ctx.font = "700 9px 'Segoe UI', system-ui, sans-serif";
+    ctx.textBaseline = "top";
+    ctx.fillText("km/h", cx, cy + 3);
 }
 
 function renderMissionHud(ui, state) {
@@ -414,10 +484,25 @@ function renderGarageHud(ui, state) {
         const unlocked = state.unlockedCars.includes(car.id);
         const selected = index === state.playerModelIndex;
         const action = unlocked ? (selected ? "Aktiv" : "Waehlen") : `$${car.unlockCost}`;
+        const stats = [
+            { label: "Speed", value: car.maxSpeed / 24, color: "#63c8ff" },
+            { label: "Accel", value: car.acceleration / 32, color: "#57d68d" },
+            { label: "Turn", value: car.turn / 4.3, color: "#c9a5ff" },
+            { label: "Masse", value: 1 - (car.mass - 0.72) / 1.18, color: "#ffc64d" },
+        ];
+        const statHtml = stats.map(({ label, value, color }) =>
+            `<div class="stat-bar-row">
+                <span class="stat-bar-label">${label}</span>
+                <div class="stat-bar-track">
+                    <div class="stat-bar-fill" style="width:${Math.round(Math.min(1, Math.max(0, value)) * 100)}%;background:${color}"></div>
+                </div>
+            </div>`
+        ).join("");
         return `
             <button class="garage-card ${selected ? "selected" : ""}" data-car-index="${index}">
                 <span>${car.name}</span>
                 <small>${car.description}</small>
+                <div class="stat-bars">${statHtml}</div>
                 <strong>${action}</strong>
             </button>
         `;
@@ -484,6 +569,16 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#091017";
     ctx.fillRect(0, 0, width, height);
+
+    // District quadrant tints
+    for (const district of world.districts ?? []) {
+        const qx = cx + (district.x * CONFIG.map.size / 4 - state.player.x) * scale;
+        const qy = cy + (district.z * CONFIG.map.size / 4 - state.player.z) * scale;
+        const half = (CONFIG.map.size / 4) * scale;
+        ctx.fillStyle = district.color + "22";
+        ctx.fillRect(qx - half, qy - half, half * 2, half * 2);
+    }
+
     ctx.strokeStyle = "rgba(255,255,255,0.09)";
     ctx.lineWidth = 1;
 
