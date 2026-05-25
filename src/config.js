@@ -1,0 +1,226 @@
+export const CONFIG = {
+    map: {
+        size: 128,
+        streets: [-52, -26, 0, 26, 52],
+        blockCenters: [-39, -13, 13, 39],
+        streetWidth: 5.4,
+        blockSize: 19,
+        poiRadius: 5.8,
+    },
+    player: {
+        radius: 1.25,
+        maxHealth: 100,
+        nitroMax: 100,
+        nitroRegen: 5,
+        nitroBurn: 24,
+        nitroBonus: 8,
+        reverseFactor: 0.45,
+    },
+    traffic: {
+        startCount: 18,
+        collisionRadius: 2.45,
+    },
+    police: {
+        maxCount: 16,
+        spawnDistance: 34,
+        searchDistance: 38,
+        collisionRadius: 2.35,
+        decayDelay: 7,
+        roadblockLevel: 3,
+        roadblockMax: 4,
+        roadblockCooldown: 8,
+    },
+    pickups: {
+        startCount: 20,
+        maxCount: 22,
+        collectRadius: 2.65,
+        respawnRate: 0.7,
+    },
+    camera: {
+        height: 38,
+        backOffset: 8,
+        followLerp: 4.6,
+    },
+    ui: {
+        minimapRange: 74,
+    },
+};
+
+export const HEAT_TIERS = [
+    { level: 0, name: "CLEAR", score: 1, police: 0, tactics: "Patrouille" },
+    { level: 1, name: "WATCH", score: 1.08, police: 2, tactics: "Sichtung" },
+    { level: 2, name: "PURSUIT", score: 1.18, police: 4, tactics: "Direkte Verfolgung" },
+    { level: 3, name: "LOCKDOWN", score: 1.34, police: 7, tactics: "Roadblocks" },
+    { level: 4, name: "SWAT", score: 1.55, police: 10, tactics: "Rammen und Spikes" },
+    { level: 5, name: "MAYHEM", score: 1.8, police: 14, tactics: "Alles auf dich" },
+];
+
+export const DISTRICTS = [
+    { id: "northwest", name: "Old Harbor", x: -1, z: -1, color: "#4f6f8f", bonus: "Cash" },
+    { id: "northeast", name: "Glass Mile", x: 1, z: -1, color: "#63c8ff", bonus: "Tempo" },
+    { id: "southwest", name: "Brickworks", x: -1, z: 1, color: "#c9a5ff", bonus: "Teile" },
+    { id: "southeast", name: "Sunset Park", x: 1, z: 1, color: "#57d68d", bonus: "Nitro" },
+];
+
+export const WEATHER_MODES = {
+    clear: { label: "Klar", grip: 1, visibility: 1, color: "#111720" },
+    rain: { label: "Regen", grip: 0.82, visibility: 0.92, color: "#101924" },
+    fog: { label: "Nebel", grip: 0.94, visibility: 0.72, color: "#18202a" },
+};
+
+export const WORLD_EVENTS = [
+    { id: "cashDrop", label: "Cash Drop", color: "#ffc64d", score: 500, cash: 260, heat: 1 },
+    { id: "partsCache", label: "Teilelager", color: "#c9a5ff", score: 380, cash: 120, heal: 24, heat: 0 },
+    { id: "hotVan", label: "Geldtransporter", color: "#ff6a4f", score: 760, cash: 420, heat: 2 },
+];
+
+export const CONTRACTS = [
+    {
+        id: "cleanRun",
+        label: "Saubere Flucht",
+        description: "Schliesse 2 Missionen mit Heat 2 oder niedriger ab.",
+        metric: "missionsLowHeat",
+        target: 2,
+        reward: 420,
+    },
+    {
+        id: "chaosDriver",
+        label: "Chaosfahrer",
+        description: "Zerlege 8 Props in einem Run.",
+        metric: "propsDestroyed",
+        target: 8,
+        reward: 360,
+    },
+    {
+        id: "heatSurfer",
+        label: "Heat Surfer",
+        description: "Sammle 5 Close-Calls bei Heat 3+.",
+        metric: "highHeatCloseCalls",
+        target: 5,
+        reward: 500,
+    },
+    {
+        id: "eventRunner",
+        label: "Event Runner",
+        description: "Sichere 2 Welt-Events in einem Run.",
+        metric: "events",
+        target: 2,
+        reward: 460,
+    },
+];
+
+export const ACHIEVEMENTS = [
+    { id: "firstMission", label: "Erster Auftrag", description: "Schliesse deine erste Mission ab.", metric: "lifetimeMissions", target: 1, reward: 250 },
+    { id: "collector", label: "Sammler", description: "Sammle 30 Pickups insgesamt.", metric: "lifetimePickups", target: 30, reward: 300 },
+    { id: "demolition", label: "Abrissbirne", description: "Zerstoere 25 Props insgesamt.", metric: "lifetimeProps", target: 25, reward: 360 },
+    { id: "highRoller", label: "High Roller", description: "Erreiche 10.000 Bestscore.", metric: "bestScore", target: 10000, reward: 600 },
+    { id: "fullGarage", label: "Fuhrpark", description: "Schalte alle Autos frei.", metric: "unlockedCars", target: 4, reward: 900 },
+];
+
+export const UPGRADES = {
+    engine: {
+        label: "Motor",
+        max: 4,
+        baseCost: 420,
+        effect: "Mehr Tempo und Beschleunigung",
+    },
+    armor: {
+        label: "Panzerung",
+        max: 4,
+        baseCost: 390,
+        effect: "Mehr Karosserie und weniger Crash-Schaden",
+    },
+    nitro: {
+        label: "Nitro",
+        max: 4,
+        baseCost: 360,
+        effect: "Groesserer Tank und staerkerer Boost",
+    },
+    grip: {
+        label: "Grip",
+        max: 4,
+        baseCost: 330,
+        effect: "Stabileres Driften und besseres Bremsen",
+    },
+};
+
+export const CAR_MODELS = [
+    {
+        id: "comet",
+        name: "Comet",
+        description: "Ausgewogener Starter mit gutem Driftfenster.",
+        unlockCost: 0,
+        color: "#e94d41",
+        trim: "#151a21",
+        length: 4.2,
+        width: 2.0,
+        height: 0.72,
+        maxSpeed: 19,
+        acceleration: 25,
+        turn: 3.7,
+        roof: "coupe",
+    },
+    {
+        id: "bulldog",
+        name: "Bulldog",
+        description: "Schwerer Muscle-Wagen, stark bei Remplern.",
+        unlockCost: 900,
+        color: "#ffb13c",
+        trim: "#252015",
+        length: 4.9,
+        width: 2.22,
+        height: 0.86,
+        maxSpeed: 16,
+        acceleration: 22,
+        turn: 3.25,
+        roof: "muscle",
+    },
+    {
+        id: "needle",
+        name: "Needle",
+        description: "Sehr schnell, leicht, braucht saubere Linien.",
+        unlockCost: 1400,
+        color: "#4fc3ff",
+        trim: "#0f2330",
+        length: 3.75,
+        width: 1.82,
+        height: 0.58,
+        maxSpeed: 22,
+        acceleration: 28,
+        turn: 4.05,
+        roof: "sport",
+    },
+    {
+        id: "mule",
+        name: "Mule",
+        description: "Langsam, aber stabil und fehlertolerant.",
+        unlockCost: 1100,
+        color: "#76d18f",
+        trim: "#172116",
+        length: 5.4,
+        width: 2.25,
+        height: 1.05,
+        maxSpeed: 14,
+        acceleration: 19,
+        turn: 2.85,
+        roof: "van",
+    },
+];
+
+export const PICKUP_TYPES = {
+    cash: { color: "#ffc64d", score: 120, cash: 60, wanted: 1, label: "Cash" },
+    repair: { color: "#57d68d", score: 90, heal: 24, wanted: 0, label: "Repair" },
+    intel: { color: "#63c8ff", score: 160, wanted: -1, label: "Scanner" },
+    nitro: { color: "#ff6a4f", score: 120, nitro: 48, wanted: 0, label: "Nitro" },
+    parts: { color: "#c9a5ff", score: 140, cash: 35, heal: 10, wanted: 0, label: "Teile" },
+    emp: { color: "#f7fbff", score: 180, emp: true, wanted: -1, label: "EMP" },
+};
+
+export const POIS = [
+    { id: "safehouse", name: "Safehouse", x: -39, z: -39, color: "#57d68d" },
+    { id: "garage", name: "Garage", x: 39, z: -39, color: "#ffc64d" },
+    { id: "precinct", name: "Precinct", x: -39, z: 39, color: "#63c8ff" },
+    { id: "depot", name: "Depot", x: 39, z: 13, color: "#ff6a4f" },
+    { id: "fuel", name: "Tankstelle", x: 13, z: 39, color: "#fff08a" },
+    { id: "yard", name: "Baustelle", x: -13, z: 13, color: "#c9a5ff" },
+];
