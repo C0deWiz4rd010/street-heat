@@ -56,6 +56,8 @@ assert.equal(state.lifetime.pickups, 9);
 assert.equal(state.time.phase, "day");
 assert.equal(state.player.inShortcut, false);
 assert.equal(typeof state.mission.bonus.id, "string");
+assert.equal(state.mission.cashoutMultiplier, 1);
+assert.equal(state.mission.isBoss, false);
 
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);

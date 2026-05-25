@@ -57,6 +57,8 @@ Die Umsetzung erfolgt in drei Wellen:
 - Missionen haben jetzt thematische Bonusziele wie Tempo, saubere Fahrt, Shortcut-Nutzung, hohes Heat-Finish oder garagefreien Abschluss
 - Bezirks-Pickup-Missionen markieren ihre Zielzone und seed-en passende Pickups im relevanten Stadtteil
 - Missions-HUD zeigt Bonusziel, Fortschritt und klarere Auftragstitel direkt im Run
+- Hot-Drop-Abgaben erlauben jetzt Risk-Reward-Entscheidungen: direkt kassieren oder weiterziehen fuer hoeheren Multiplikator bei steigendem Heat
+- Boss-Auftraege tauchen alle paar Runs als Sondermissionen auf: gepanzerter Transporter, Helikopterjagd und Hafenblockade
 
 ## Priorisierte Problemstellen
 1. Ressourcenverwaltung:

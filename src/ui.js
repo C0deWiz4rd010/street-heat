@@ -328,6 +328,29 @@ function renderMissionHud(ui, state) {
         return;
     }
 
+    if (mission.type === "bossArmored") {
+        ui.missionTitle.textContent = mission.chainName;
+        ui.missionText.textContent = mission.cargo
+            ? `${mission.description} Drop ${mission.to.name}. Zeit ${timer}s.`
+            : `${mission.description} Hackfortschritt ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionFill.style.width = `${clamp(mission.progress / Math.max(1, mission.target), 0, 1) * 100}%`;
+        return;
+    }
+
+    if (mission.type === "bossHeli") {
+        ui.missionTitle.textContent = mission.chainName;
+        ui.missionText.textContent = `${mission.description} Fortschritt ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionFill.style.width = `${clamp(mission.progress / Math.max(1, mission.target), 0, 1) * 100}%`;
+        return;
+    }
+
+    if (mission.type === "bossBlockade") {
+        ui.missionTitle.textContent = mission.chainName;
+        ui.missionText.textContent = `${mission.description} Durchbrueche ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionFill.style.width = `${clamp(mission.progress / Math.max(1, mission.target), 0, 1) * 100}%`;
+        return;
+    }
+
     ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
     ui.missionText.textContent = `${mission.description} Ziel ${mission.to.name}. Zeit ${timer}s.`;
     ui.missionFill.style.width = `${clamp(1 - mission.timer / (34 + mission.stage * 4), 0, 1) * 100}%`;
@@ -504,12 +527,15 @@ function formatMissionBonus(mission) {
     const bonus = mission.bonus;
     if (!bonus) return "Bonusziel: offline";
     const complete = bonus.completed ? "Done" : `${bonus.progress}/${bonus.target}`;
-    return `Bonus: ${bonus.label} | ${complete} | $${bonus.reward}`;
+    const hotDrop = mission.cashoutMultiplier > 1 ? ` | Hot Drop x${mission.cashoutMultiplier.toFixed(2)}` : "";
+    return `Bonus: ${bonus.label} | ${complete} | $${bonus.reward}${hotDrop}`;
 }
 
 function currentMissionTarget(state) {
     const mission = state.mission;
     if (mission.type === "pickup") return mission.to;
+    if (mission.type === "bossArmored") return mission.cargo ? mission.to : mission.from;
+    if (mission.type === "bossHeli" || mission.type === "bossBlockade") return mission.to;
     if (mission.type === "delivery" || mission.type === "heist") return mission.cargo ? mission.to : mission.from;
     if (mission.type === "escape") return mission.to;
     if (mission.type === "checkpoint") return mission.route[mission.routeIndex] ?? null;

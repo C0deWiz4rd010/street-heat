@@ -44,6 +44,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const particles = [];
     const skidMarks = [];
     const rainDrops = [];
+    let missionBoss = null;
     const helicopter = createHelicopterMesh();
     const pickupGeo = new THREE.OctahedronGeometry(0.55, 0);
     const particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
@@ -117,6 +118,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.district = getDistrictAt(0, 0);
         setStatus(options.showMenu ? "Waehle einen Run oder pruefe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
         hideGameOver(ui);
+        clearMissionBoss();
 
         replaceCarModel(playerCar, CAR_MODELS[state.playerModelIndex], sharedMaterials);
         playerCar.position.set(0, 0.38, 0);
@@ -178,6 +180,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateParticles(dt);
         updateSkidMarks(dt);
         updatePoiEffects(dt, input);
+        updateMissionInteraction(input);
         updateCamera(dt);
         audio?.update(state, dt);
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
@@ -200,10 +203,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function setMission(stage) {
+        clearMissionBoss();
         const chainStage = (stage - 1) % 3;
-        const districtId = MISSION_DISTRICT_ORDER[Math.floor((stage - 1) / 3) % MISSION_DISTRICT_ORDER.length];
-        const missionConfig = buildMissionConfig(stage, districtId, chainStage);
-        const missionDistrict = DISTRICTS.find((district) => district.id === districtId) ?? DISTRICTS[0];
+        const bossMission = shouldSpawnBossMission(stage);
+        const baseDistrictId = MISSION_DISTRICT_ORDER[Math.floor((stage - 1) / 3) % MISSION_DISTRICT_ORDER.length];
+        const missionConfig = bossMission
+            ? buildBossMissionConfig(stage, baseDistrictId)
+            : buildMissionConfig(stage, baseDistrictId, chainStage);
+        const missionDistrict = DISTRICTS.find((district) => district.id === (missionConfig.districtId ?? baseDistrictId)) ?? DISTRICTS[0];
         state.mission.stage = stage;
         state.mission.progress = 0;
         state.mission.cargo = false;
@@ -226,6 +233,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.mission.collisionCount = 0;
         state.mission.repairCount = 0;
         state.mission.shortcutEntries = 0;
+        state.mission.turnInReady = false;
+        state.mission.cashoutMultiplier = 1;
+        state.mission.riskLevel = 0;
+        state.mission.maxRiskLevel = missionConfig.maxRiskLevel ?? 2;
+        state.mission.isBoss = Boolean(missionConfig.isBoss);
+        state.mission.bossType = missionConfig.bossType ?? null;
         state.mission.bonus = {
             ...missionConfig.bonus,
             progress: missionConfig.bonus.id === "quickFinish" ? missionConfig.timer : 0,
@@ -235,6 +248,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (missionConfig.route?.length) state.mission.to = missionConfig.route[0];
         if (missionConfig.pickupSeed) seedMissionDistrictPickups(missionDistrict, missionConfig.pickupSeed);
         if (missionConfig.minimumHeat) updateWanted(Math.max(state.wanted.level, missionConfig.minimumHeat));
+        if (missionConfig.bossType) spawnMissionBoss(missionConfig, missionDistrict);
         updateMissionBonusProgress();
     }
 
@@ -345,6 +359,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function updateMission(dt) {
         state.mission.timer -= dt;
         updateMissionBonusProgress();
+        updateMissionBoss(dt);
         if (state.mission.timer <= 0) {
             damagePlayer(16);
             setStatus("Mission verpasst. Neue Chance, aber Karosserie leidet.", 2.6);
@@ -357,7 +372,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 state.mission.cargo = true;
                 setStatus("Paket geladen. Ziel aktualisiert.", 2.2);
             }
-            if (state.mission.cargo && distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) completeMission();
+            if (state.mission.cargo && distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
+                state.mission.turnInReady = true;
+            }
         }
 
         if (state.mission.type === "checkpoint") {
@@ -378,14 +395,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 updateWanted(Math.max(state.wanted.level, 4));
                 setStatus("Beute geladen. Bring sie ins Safehouse.", 2.2);
             }
-            if (state.mission.cargo && distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) completeMission();
+            if (state.mission.cargo && distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
+                state.mission.turnInReady = true;
+            }
         }
 
         if (state.mission.type === "escape") {
             if (state.wanted.level < 1) updateWanted(1);
             if (distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
-                updateWanted(Math.max(0, state.wanted.level - 2));
-                completeMission();
+                state.mission.turnInReady = true;
             }
         }
     }
@@ -394,7 +412,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateMissionBonusProgress();
         const bonus = state.mission.bonus;
         const bonusAchieved = Boolean(bonus?.completed);
-        const reward = 850 + state.mission.stage * 230 + (state.mission.type === "heist" ? 600 : 0);
+        const baseReward = 850 + state.mission.stage * 230 + (state.mission.type === "heist" ? 600 : 0) + (state.mission.isBoss ? 520 : 0);
+        const hotMultiplier = state.mission.cashoutMultiplier ?? 1;
+        const reward = Math.round(baseReward * hotMultiplier);
         addScore(reward, true);
         const cashGain = addCash(Math.floor(reward * 0.34));
         let bonusCash = 0;
@@ -407,6 +427,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             addScore(340 + state.mission.stage * 45, true);
             chainCash = addCash(180 + state.mission.stage * 35);
         }
+        if (state.mission.type === "escape" || state.mission.type === "bossHeli") {
+            updateWanted(Math.max(0, state.wanted.level - 2));
+        }
         state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 30);
         state.stats.missions += 1;
         state.lifetime.missions += 1;
@@ -415,6 +438,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         audio?.mission();
         const missionName = state.mission.chainName;
         const statusParts = [`${missionName} abgeschlossen.`, `Bank +$${cashGain}`];
+        if (hotMultiplier > 1) statusParts.push(`Hot Drop x${hotMultiplier.toFixed(2)}`);
         if (bonusCash > 0) statusParts.push(`Bonus +$${bonusCash}`);
         if (chainCash > 0) statusParts.push(`Chain +$${chainCash}`);
         setStatus(statusParts.join(" "), 3);
@@ -710,6 +734,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const fuel = getPoi("fuel");
         const nearGarage = distanceTo(garage.x, garage.z) < CONFIG.map.poiRadius;
         const nearSafehouse = distanceTo(safehouse.x, safehouse.z) < CONFIG.map.poiRadius;
+        const missionTurnInTarget = currentMissionTurnInTarget();
+        const missionUsesSafehouse = missionTurnInTarget && distanceSq(missionTurnInTarget.x, missionTurnInTarget.z, safehouse.x, safehouse.z) < 1;
 
         if (nearGarage) {
             state.actionPrompt = "E Garage oeffnen";
@@ -725,7 +751,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 setStatus("Garage: Reparatur und Nitro aufgefuellt.", 2);
             }
         }
-        if (nearSafehouse && state.wanted.level > 0) {
+        if (nearSafehouse && state.wanted.level > 0 && !missionUsesSafehouse) {
             state.actionPrompt = state.safehouseCooldown > 0
                 ? "E Safehouse: Kontakt fuer $120 bestechen"
                 : "Safehouse: Heat-Kontakt aktiv";
@@ -747,6 +773,29 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         if (distanceTo(fuel.x, fuel.z) < CONFIG.map.poiRadius && state.player.nitro < getNitroMax()) {
             state.player.nitro = Math.min(getNitroMax(), state.player.nitro + dt * 16);
+        }
+    }
+
+    function updateMissionInteraction(input) {
+        if (!canCashOutMission()) return;
+        const target = currentMissionTurnInTarget();
+        if (!target) return;
+
+        const dist = distanceTo(target.x, target.z);
+        const inZone = dist < CONFIG.map.poiRadius;
+        if (inZone) {
+            const nextHot = state.mission.riskLevel < state.mission.maxRiskLevel
+                ? ` | Weiterziehen fuer x${(state.mission.cashoutMultiplier + 0.35).toFixed(2)}`
+                : "";
+            state.actionPrompt = `E Auftrag abgeben${nextHot}`;
+            if (input.consume("e")) {
+                completeMission();
+                return;
+            }
+        }
+
+        if (state.mission.turnInReady && !inZone && dist > CONFIG.map.poiRadius * 2.1 && state.mission.riskLevel < state.mission.maxRiskLevel) {
+            pushMissionCashout();
         }
     }
 
@@ -1697,6 +1746,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     timer: 50 + stageScale * 4,
                     from: { name: "Courier Hub", x: 18, z: 40 },
                     to: { name: "Skyline Drop", x: 47, z: 19 },
+                    maxRiskLevel: 3,
                     bonus: { id: "quickFinish", label: "Tempo-Bonus", description: "Schliesse frueh ab.", target: 20, reward: 220 },
                 };
             }
@@ -1744,6 +1794,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     timer: 52 + stageScale * 4,
                     from: getPoi("yard"),
                     to: getPoi("depot"),
+                    maxRiskLevel: 2,
                     bonus: { id: "quickFinish", label: "Schichtende", description: "Unter Zeitdruck liefern.", target: 18, reward: 240 },
                 };
             }
@@ -1756,6 +1807,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 from: { name: "Schmelzhof", x: -18, z: 22 },
                 to: getPoi("safehouse"),
                 minimumHeat: 3,
+                maxRiskLevel: 3,
                 bonus: { id: "noCrash", label: "Keine Dellen", description: "Ohne Einschlag rausfahren.", target: 1, reward: 300 },
             };
         }
@@ -1792,6 +1844,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 timer: 38 + stageScale * 4,
                 to: getPoi("garage"),
                 minimumHeat: 1 + Math.min(2, stageScale),
+                maxRiskLevel: 2,
                 bonus: { id: "noCrash", label: "Soft Touch", description: "Ohne Einschlag zur Ausfahrt.", target: 1, reward: 260 },
             };
         }
@@ -1806,6 +1859,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 from: { name: "Pier Safe", x: -44, z: -19 },
                 to: getPoi("safehouse"),
                 minimumHeat: 2,
+                maxRiskLevel: 3,
                 bonus: { id: "highHeat", label: "Heisse Route", description: "Mit Heat 3+ abgeben.", target: 3, reward: 280 },
             };
         }
@@ -1829,6 +1883,60 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             to: getPoi("safehouse"),
             minimumHeat: 3,
             bonus: { id: "highHeat", label: "Harter Cut", description: "Mit Heat 4+ rauskommen.", target: 4, reward: 320 },
+        };
+    }
+
+    function shouldSpawnBossMission(stage) {
+        return stage > 0 && stage % 6 === 0;
+    }
+
+    function buildBossMissionConfig(stage, districtId) {
+        const bossIndex = Math.floor(stage / 6) % 3;
+        if (bossIndex === 1) {
+            return {
+                type: "bossArmored",
+                title: "Boss: Gepanzerter Transporter",
+                description: "Brich den Konvoi auf, sichere die Ladung und bring sie heim.",
+                target: 1,
+                timer: 64,
+                to: getPoi("safehouse"),
+                minimumHeat: 4,
+                isBoss: true,
+                bossType: "armoredTransporter",
+                districtId: "industrial",
+                maxRiskLevel: 3,
+                bonus: { id: "highHeat", label: "Grosswild", description: "Mit Heat 4+ abgeben.", target: 4, reward: 420 },
+            };
+        }
+        if (bossIndex === 2) {
+            return {
+                type: "bossHeli",
+                title: "Boss: Helikopterjagd",
+                description: "Halte die Jagd aus, dann tauch am Safehouse ab.",
+                target: 1,
+                timer: 58,
+                to: getPoi("safehouse"),
+                minimumHeat: 5,
+                isBoss: true,
+                bossType: "helicopterHunt",
+                districtId: "downtown",
+                maxRiskLevel: 2,
+                bonus: { id: "quickFinish", label: "Aus dem Licht", description: "Finde frueh den Ausstieg.", target: 24, reward: 400 },
+            };
+        }
+        return {
+            type: "bossBlockade",
+            title: "Boss: Hafenblockade",
+            description: "Spreng die Sperre auf und finde den Ausweg durch die Docks.",
+            target: 2,
+            timer: 60,
+            to: { name: "Breakwater Gate", x: -44, z: -14 },
+            minimumHeat: 4,
+            isBoss: true,
+            bossType: "harborBlockade",
+            districtId: "harbor",
+            maxRiskLevel: 3,
+            bonus: { id: "noCrash", label: "Sauberer Durchbruch", description: "Ohne Einschlag durch die Blockade.", target: 1, reward: 430 },
         };
     }
 
@@ -1888,6 +1996,202 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         bonus.progress = state.mission.collisionCount === 0 ? 1 : 0;
         bonus.completed = state.mission.collisionCount === 0;
+    }
+
+    function canCashOutMission() {
+        return state.mission.turnInReady && currentMissionTurnInTarget();
+    }
+
+    function currentMissionTurnInTarget() {
+        return state.mission.to ?? null;
+    }
+
+    function pushMissionCashout() {
+        const nextTier = state.mission.riskLevel + 1;
+        state.mission.riskLevel = nextTier;
+        state.mission.turnInReady = false;
+        state.mission.cashoutMultiplier = 1 + nextTier * 0.35;
+        state.mission.timer += 10 + nextTier * 2;
+        updateWanted(Math.min(5, state.wanted.level + 1));
+        const nextTarget = chooseHotDropTarget(state.mission.districtId, state.mission.to);
+        if (nextTarget) state.mission.to = nextTarget;
+        setStatus(`Hot Drop verlaengert. Multiplikator x${state.mission.cashoutMultiplier.toFixed(2)}. Heat steigt.`, 2.2);
+        audio?.upgrade();
+    }
+
+    function chooseHotDropTarget(districtId, previousTarget) {
+        const districtPoints = DISTRICT_MISSION_POINTS[districtId] ?? [];
+        const options = [...districtPoints, ...POIS].filter((target) => {
+            if (!previousTarget) return true;
+            return distanceSq(target.x, target.z, previousTarget.x, previousTarget.z) > 18 * 18;
+        });
+        if (!options.length) return previousTarget;
+        const target = options[Math.floor(Math.random() * options.length)];
+        return { ...target };
+    }
+
+    function spawnMissionBoss(config, district) {
+        if (config.bossType === "armoredTransporter") {
+            const axis = Math.random() < 0.5 ? "x" : "z";
+            const streetOptions = getDistrictTrafficStreets(axis, district);
+            const street = streetOptions[Math.floor(Math.random() * streetOptions.length)];
+            const pos = getDistrictTrafficPosition(axis, district);
+            const direction = Math.random() < 0.5 ? -1 : 1;
+            const x = axis === "x" ? pos : street;
+            const z = axis === "z" ? pos : street;
+            const model = { ...CAR_MODELS[3], name: "APC Van", color: "#626b76", trim: "#171b21", width: 2.38, length: 5.3 };
+            const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
+            mesh.position.set(x, 0.38, z);
+            mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+            const escortLight = addAmbientHeadlights(mesh, model, "#ffc64d");
+            scene.add(mesh);
+            missionBoss = {
+                type: "armoredTransporter",
+                mesh,
+                x,
+                z,
+                axis,
+                direction,
+                speed: 6.8,
+                hackProgress: 0,
+                hacked: false,
+                lights: escortLight,
+            };
+            state.mission.from = { name: "APC Van", x, z };
+            state.mission.to = { ...getPoi("safehouse") };
+            setStatus("Boss-Dispatch: Gepanzerter Transporter gesichtet.", 2.4);
+            return;
+        }
+
+        if (config.bossType === "helicopterHunt") {
+            missionBoss = {
+                type: "helicopterHunt",
+                surviveTime: 18,
+                maxSurviveTime: 18,
+            };
+            state.mission.progress = 0;
+            state.mission.target = 18;
+            setStatus("Boss-Dispatch: Helikopter setzt zur Volljagd an.", 2.4);
+            return;
+        }
+
+        const blockers = [];
+        const barrierPoints = [
+            { x: -47, z: -26, axis: "x" },
+            { x: -26, z: -47, axis: "z" },
+        ];
+        for (const point of barrierPoints) {
+            const mesh = createRoadblockMesh(point.axis);
+            mesh.position.set(point.x, 0.14, point.z);
+            scene.add(mesh);
+            const blocker = { mesh, x: point.x, z: point.z, radius: 4.2, life: 62, cooldown: 0, bossOwned: true };
+            roadblocks.push(blocker);
+            blockers.push(blocker);
+        }
+        missionBoss = {
+            type: "harborBlockade",
+            blockers,
+            checkpoints: [{ name: "Dock Gap", x: -47, z: -26 }, { name: "Gate Split", x: -26, z: -47 }],
+            checkpointIndex: 0,
+        };
+        state.mission.to = { ...missionBoss.checkpoints[0] };
+        state.mission.progress = 0;
+        state.mission.target = missionBoss.checkpoints.length;
+        setStatus("Boss-Dispatch: Hafenblockade aktiv. Durchbruch markieren.", 2.4);
+    }
+
+    function updateMissionBoss(dt) {
+        if (!missionBoss) return;
+
+        if (missionBoss.type === "armoredTransporter") {
+            const move = missionBoss.speed * missionBoss.direction * dt;
+            if (missionBoss.axis === "x") missionBoss.x += move;
+            else missionBoss.z += move;
+            const district = DISTRICTS.find((entry) => entry.id === "industrial") ?? DISTRICTS[0];
+            const minX = district.x < 0 ? -CONFIG.map.size / 2 + 4 : 4;
+            const maxX = district.x < 0 ? -4 : CONFIG.map.size / 2 - 4;
+            const minZ = district.z < 0 ? -CONFIG.map.size / 2 + 4 : 4;
+            const maxZ = district.z < 0 ? -4 : CONFIG.map.size / 2 - 4;
+            if (missionBoss.x <= minX || missionBoss.x >= maxX) {
+                missionBoss.direction *= -1;
+                missionBoss.x = clamp(missionBoss.x, minX, maxX);
+            }
+            if (missionBoss.z <= minZ || missionBoss.z >= maxZ) {
+                missionBoss.direction *= -1;
+                missionBoss.z = clamp(missionBoss.z, minZ, maxZ);
+            }
+            missionBoss.mesh.position.set(missionBoss.x, 0.38, missionBoss.z);
+            missionBoss.mesh.rotation.y = missionBoss.axis === "x"
+                ? missionBoss.direction > 0 ? Math.PI / 2 : -Math.PI / 2
+                : missionBoss.direction > 0 ? 0 : Math.PI;
+            state.mission.from = { name: "APC Van", x: missionBoss.x, z: missionBoss.z };
+
+            if (!missionBoss.hacked) {
+                const close = distanceTo(missionBoss.x, missionBoss.z) < 8.5;
+                missionBoss.hackProgress = close ? Math.min(4.5, missionBoss.hackProgress + dt) : Math.max(0, missionBoss.hackProgress - dt * 0.45);
+                state.mission.progress = Math.round((missionBoss.hackProgress / 4.5) * 100);
+                state.mission.target = 100;
+                if (close) state.actionPrompt = "Bleib dran: Transporter wird aufgebrochen";
+                if (missionBoss.hackProgress >= 4.5) {
+                    missionBoss.hacked = true;
+                    state.mission.cargo = true;
+                    state.mission.progress = 1;
+                    state.mission.target = 1;
+                    state.mission.from = null;
+                    state.mission.to = { ...getPoi("safehouse") };
+                    setStatus("Transporter geknackt. Bring die Fracht zum Safehouse.", 2.4);
+                }
+            } else if (distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
+                state.mission.turnInReady = true;
+            }
+            return;
+        }
+
+        if (missionBoss.type === "helicopterHunt") {
+            updateWanted(Math.max(state.wanted.level, 5));
+            missionBoss.surviveTime = Math.max(0, missionBoss.surviveTime - dt);
+            state.mission.progress = Math.round((missionBoss.maxSurviveTime - missionBoss.surviveTime) * 10);
+            state.mission.target = Math.round(missionBoss.maxSurviveTime * 10);
+            if (missionBoss.surviveTime <= 0 && distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
+                state.mission.turnInReady = true;
+            }
+            if (missionBoss.surviveTime > 0) {
+                state.mission.description = `Ueberlebe im Suchlicht. Noch ${Math.ceil(missionBoss.surviveTime)}s, dann zum Safehouse.`;
+            }
+            return;
+        }
+
+        if (missionBoss.type === "harborBlockade") {
+            const nextCheckpoint = missionBoss.checkpoints[missionBoss.checkpointIndex];
+            if (nextCheckpoint) {
+                state.mission.to = { ...nextCheckpoint };
+                if (distanceTo(nextCheckpoint.x, nextCheckpoint.z) < CONFIG.map.poiRadius) {
+                    missionBoss.checkpointIndex += 1;
+                    state.mission.progress += 1;
+                    spawnParticle(nextCheckpoint.x, nextCheckpoint.z, "#ff9c45", 18);
+                    setStatus(`${nextCheckpoint.name} durchbrochen.`, 1.8);
+                    if (missionBoss.checkpointIndex >= missionBoss.checkpoints.length) {
+                        state.mission.to = { ...getPoi("safehouse") };
+                        state.mission.description = "Blockade offen. Bring den Run jetzt ins Safehouse.";
+                    }
+                }
+            } else if (distanceTo(state.mission.to.x, state.mission.to.z) < CONFIG.map.poiRadius) {
+                state.mission.turnInReady = true;
+            }
+        }
+    }
+
+    function clearMissionBoss() {
+        if (!missionBoss) return;
+        if (missionBoss.mesh) scene.remove(missionBoss.mesh);
+        if (missionBoss.blockers) {
+            for (const blocker of missionBoss.blockers) {
+                scene.remove(blocker.mesh);
+                const roadblockIndex = roadblocks.indexOf(blocker);
+                if (roadblockIndex >= 0) roadblocks.splice(roadblockIndex, 1);
+            }
+        }
+        missionBoss = null;
     }
 
     function destroyObstacle(obstacle, impact) {

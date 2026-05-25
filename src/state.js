@@ -54,6 +54,12 @@ export function createInitialState() {
             collisionCount: 0,
             repairCount: 0,
             shortcutEntries: 0,
+            turnInReady: false,
+            cashoutMultiplier: 1,
+            riskLevel: 0,
+            maxRiskLevel: 2,
+            isBoss: false,
+            bossType: null,
             bonus: {
                 id: "quickFinish",
                 label: "Tempo-Bonus",
