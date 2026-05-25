@@ -37,9 +37,11 @@ export const CONFIG = {
         respawnRate: 0.7,
     },
     camera: {
-        height: 38,
-        backOffset: 8,
-        followLerp: 4.6,
+        height: 26,
+        backOffset: 10,
+        followLerp: 3.6,
+        fovBase: 56,
+        fovMax: 68,
     },
     ui: {
         minimapRange: 74,

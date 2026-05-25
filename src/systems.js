@@ -69,10 +69,17 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.player.z = 0;
         state.player.rotation = 0;
         state.player.speed = 0;
+        state.player.vx = 0;
+        state.player.vz = 0;
+        state.player.speedMag = 0;
         state.player.health = getMaxHealth();
         state.player.nitro = 24;
         state.player.drift = 0;
+        state.player.driftSessionScore = 0;
         state.player.inShortcut = false;
+        state.popup = { text: "", timer: 0, type: "normal" };
+        state.nearMiss = { count: 0, timer: 0, streak: 0, streakTimer: 0 };
+        state.nearestPoliceDistance = Infinity;
         state.wanted.level = 0;
         state.wanted.status = "CLEAR";
         state.wanted.decay = 0;
@@ -156,6 +163,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
 
         if (!state.paused) updateCombo(dt);
+        if (state.popup?.timer > 0) state.popup.timer = Math.max(0, state.popup.timer - dt);
+        if (state.nearMiss?.streakTimer > 0) {
+            state.nearMiss.streakTimer -= dt;
+            if (state.nearMiss.streakTimer <= 0) state.nearMiss.streak = 0;
+        }
         updateDebug(dt);
 
         if (!state.running || state.paused || state.screen !== "playing") {
@@ -266,6 +278,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const gripLevel = state.upgrades.grip;
         const nitroLevel = state.upgrades.nitro;
         const weatherGrip = WEATHER_MODES[state.weather.mode]?.grip ?? 1;
+        const mass = model.mass ?? 1.0;
         const maxSpeed = model.maxSpeed * (1 + engineLevel * 0.075) + (inShortcut ? district.shortcutBoost ?? 0 : 0);
         const acceleration = model.acceleration * (1 + engineLevel * 0.085) * (0.92 + weatherGrip * 0.08);
         const turnPower = model.turn * (1 + gripLevel * 0.045) * weatherGrip * (inShortcut ? 1.08 : 1);
@@ -277,50 +290,110 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const left = keys.a || keys.arrowleft ? 1 : 0;
         const right = keys.d || keys.arrowright ? 1 : 0;
         const handbrake = Boolean(keys[" "]);
-        const nitro = Boolean(keys.shift && player.nitro > 0 && Math.abs(player.speed) > 2);
+        const turnInput = left - right;
+
+        // Forward/lateral axes from current rotation
+        const fwdX = Math.sin(player.rotation);
+        const fwdZ = Math.cos(player.rotation);
+        const latX = Math.cos(player.rotation);
+        const latZ = -Math.sin(player.rotation);
+
+        // Project current velocity onto axes
+        const vx = player.vx ?? 0;
+        const vz = player.vz ?? 0;
+        let fwdSpeed = vx * fwdX + vz * fwdZ;
+        let latSpeed = vx * latX + vz * latZ;
+
+        const nitro = Boolean(keys.shift && player.nitro > 0 && Math.abs(fwdSpeed) > 2);
         const boostedMax = maxSpeed + (nitro ? CONFIG.player.nitroBonus + nitroLevel * 2.4 : 0);
 
         if (nitro) {
             player.nitro = Math.max(0, player.nitro - dt * CONFIG.player.nitroBurn);
-            spawnParticle(player.x - Math.sin(player.rotation) * 2, player.z - Math.cos(player.rotation) * 2, "#63c8ff", 2);
+            spawnParticle(player.x - fwdX * 2, player.z - fwdZ * 2, "#63c8ff", 2);
         } else {
             const districtNitro = district.nitroRegenBonus ?? 0;
             const shortcutNitro = inShortcut ? 0.95 : 0;
             player.nitro = Math.min(nitroMax, player.nitro + dt * (CONFIG.player.nitroRegen + nitroLevel * 0.9 + districtNitro + shortcutNitro));
         }
 
+        // Longitudinal (forward) dynamics
         if (forward) {
-            player.speed += acceleration * dt;
+            fwdSpeed += acceleration * dt;
         } else if (reverse) {
-            player.speed -= (player.speed > 0 ? 24 + gripLevel * 2.5 : acceleration * 0.65) * dt;
+            fwdSpeed -= (fwdSpeed > 0 ? 24 + gripLevel * 2.5 : acceleration * 0.65) * dt;
         } else {
-            player.speed -= Math.sign(player.speed) * Math.min(Math.abs(player.speed), (handbrake ? 15 + gripLevel * 2 : brakePower) * dt);
+            fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), (handbrake ? 15 + gripLevel * 2 : brakePower) * dt);
+        }
+        fwdSpeed = clamp(fwdSpeed, -boostedMax * CONFIG.player.reverseFactor, boostedMax);
+
+        // Drift state — builds up smoothly, falls off with release
+        const isDrifting = handbrake && Math.abs(fwdSpeed) > 5 && Math.abs(turnInput) > 0;
+        const wasDrifting = player.drift > 0.5;
+        player.drift = isDrifting
+            ? Math.min(1, player.drift + dt * 4.5)
+            : Math.max(0, player.drift - dt * 2.8);
+
+        // Turning — more responsive in drift, reduced at high speed
+        if (Math.abs(fwdSpeed) > 0.12) {
+            const speedRatio = Math.abs(fwdSpeed) / boostedMax;
+            const turnScale = 1 - Math.min(0.55, speedRatio * 0.5);
+            const driftBoost = isDrifting ? 1.55 + gripLevel * 0.04 : 1;
+            player.rotation += turnInput * turnPower * driftBoost * turnScale * dt * Math.sign(fwdSpeed);
         }
 
-        player.speed = clamp(player.speed, -boostedMax * CONFIG.player.reverseFactor, boostedMax);
-        const turnInput = left - right;
-        if (Math.abs(player.speed) > 0.12) {
-            const turnScale = 1 - Math.min(0.58, Math.abs(player.speed) / boostedMax * 0.45);
-            player.rotation += turnInput * turnPower * (handbrake ? 1.45 + gripLevel * 0.04 : 1) * turnScale * dt * Math.sign(player.speed);
-        }
+        // Recalculate axes after rotation change
+        const newFwdX = Math.sin(player.rotation);
+        const newFwdZ = Math.cos(player.rotation);
+        const newLatX = Math.cos(player.rotation);
+        const newLatZ = -Math.sin(player.rotation);
 
-        player.drift = handbrake && Math.abs(player.speed) > 5 && Math.abs(turnInput) > 0
-            ? 1
-            : Math.max(0, player.drift - dt * 3);
-        if (player.drift > 0) {
-            const driftGain = Math.abs(player.speed) * dt * (0.8 + gripLevel * 0.08);
+        // Lateral grip / drift friction
+        const baseGrip = (0.76 + gripLevel * 0.038) * weatherGrip;
+        const driftGrip = (0.18 + gripLevel * 0.055) * weatherGrip;
+        const lateralGrip = isDrifting ? driftGrip : baseGrip;
+        const lateralFrictionFactor = Math.pow(Math.max(0.01, lateralGrip), dt * 60);
+        latSpeed *= lateralFrictionFactor;
+
+        // Reconstruct world-space velocity
+        player.vx = newFwdX * fwdSpeed + newLatX * latSpeed;
+        player.vz = newFwdZ * fwdSpeed + newLatZ * latSpeed;
+        player.speed = fwdSpeed;
+        player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
+
+        // Drift scoring and session tracking
+        const prevDriftSession = player.driftSessionScore ?? 0;
+        if (player.drift > 0.1) {
+            const driftGain = Math.abs(fwdSpeed) * dt * (0.8 + gripLevel * 0.08);
             state.combo.driftBank += driftGain;
             state.combo.driftScore += driftGain * 10;
             state.stats.driftScore += driftGain * 10;
+            player.driftSessionScore = (player.driftSessionScore ?? 0) + driftGain * 10;
             if (state.combo.driftBank >= 14) {
                 state.combo.driftBank = 0;
                 addScore(18 + gripLevel * 5);
             }
         }
 
+        // Drift-end popup
+        if (wasDrifting && player.drift < 0.1 && prevDriftSession > 80) {
+            const earned = Math.round(prevDriftSession);
+            spawnPopup(`DRIFT! +${earned}`, "drift");
+            player.driftSessionScore = 0;
+        }
+        if (!wasDrifting && player.drift < 0.05) player.driftSessionScore = 0;
+
+        // Drift smoke from rear wheels
+        if (player.drift > 0.55 && Math.random() < dt * 8) {
+            const rearX = player.x - newFwdX * 1.7;
+            const rearZ = player.z - newFwdZ * 1.7;
+            spawnDriftSmoke(rearX + newLatX * 0.85, rearZ + newLatZ * 0.85);
+            spawnDriftSmoke(rearX - newLatX * 0.85, rearZ - newLatZ * 0.85);
+        }
+
+        // Position update using velocity vector
         const next = {
-            x: clamp(player.x + Math.sin(player.rotation) * player.speed * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
-            z: clamp(player.z + Math.cos(player.rotation) * player.speed * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
+            x: clamp(player.x + player.vx * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
+            z: clamp(player.z + player.vz * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
         };
 
         const hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
@@ -332,20 +405,24 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const distance = Math.sqrt(dx * dx + dz * dz) || 1;
             next.x += (dx / distance) * 1.2;
             next.z += (dz / distance) * 1.2;
-            const impactSpeed = Math.abs(player.speed);
-            if (hitObstacle.destructible && impactSpeed > (hitObstacle.minImpact ?? 6)) {
-                destroyedReaction = destroyObstacle(hitObstacle, impactSpeed);
+            const impactMag = player.speedMag;
+            if (hitObstacle.destructible && impactMag > (hitObstacle.minImpact ?? 6)) {
+                destroyedReaction = destroyObstacle(hitObstacle, impactMag);
             }
         }
 
         if (hitBuilding || hitObstacle) {
-            const impact = Math.abs(player.speed);
+            const impactMag = player.speedMag;
             const obstacleDamping = destroyedReaction?.speedDamping ?? hitObstacle?.speedDamping ?? 0.34;
-            player.speed *= hitBuilding ? 0.34 : obstacleDamping;
-            if (impact > 5) {
+            const dampFactor = hitBuilding ? 0.32 : obstacleDamping;
+            player.vx *= dampFactor;
+            player.vz *= dampFactor;
+            player.speed = newFwdX * player.vx + newFwdZ * player.vz;
+            player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
+            if (impactMag > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
-                damagePlayer(impact * (hitBuilding ? 0.8 : obstacleDamageScale), "crash");
-                state.cameraShake = Math.min(1, Math.max(impact * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
+                damagePlayer(impactMag * (hitBuilding ? 0.8 : obstacleDamageScale) / mass, "crash");
+                state.cameraShake = Math.min(1, Math.max(impactMag * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
                 spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : (destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d"), destroyedReaction?.particleCount ?? 18);
             }
         }
@@ -358,7 +435,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         playerCar.position.set(player.x, 0.38, player.z);
         playerCar.rotation.y = player.rotation;
 
-        if (player.drift > 0) addSkidMark();
+        if (player.drift > 0.2) addSkidMark();
     }
 
     function updateMission(dt) {
@@ -514,11 +591,30 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (car.z < -CONFIG.map.size / 2 - 6) car.z = CONFIG.map.size / 2 + 6;
 
             car.mesh.position.set(car.x, 0.35, car.z);
-            if (distanceSq(state.player.x, state.player.z, car.x, car.z) < CONFIG.traffic.collisionRadius * CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
+            const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
+            const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
+            const model = CAR_MODELS[state.playerModelIndex];
+            const mass = model.mass ?? 1.0;
+
+            // Near-miss detection
+            if (distToPlayer > CONFIG.traffic.collisionRadius && distToPlayer < CONFIG.traffic.collisionRadius + 2.8 && playerSpeedMag > 8) {
+                car.nearMissCooldown = (car.nearMissCooldown ?? 0);
+                if (car.nearMissCooldown <= 0) {
+                    car.nearMissCooldown = 2.2;
+                    triggerNearMiss();
+                }
+            }
+            car.nearMissCooldown = Math.max(0, (car.nearMissCooldown ?? 0) - dt);
+
+            if (distToPlayer < CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
                 car.cooldown = 1.1;
-                damagePlayer(Math.abs(state.player.speed) * 0.55 + 5, "crash");
+                const impactDamage = playerSpeedMag * (0.55 / mass) + (mass > 1.2 ? 3 : 5);
+                damagePlayer(impactDamage, "crash");
                 audio?.crash();
-                state.player.speed *= 0.42;
+                state.player.vx *= mass > 1.2 ? 0.55 : 0.42;
+                state.player.vz *= mass > 1.2 ? 0.55 : 0.42;
+                state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
+                state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
                 spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
                 updateWanted(state.wanted.level + 1);
             }
@@ -644,13 +740,20 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
             if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
-                const crashDamage = (Math.abs(agent.speed) + Math.abs(state.player.speed)) * (agent.unitType === "suv" ? 1.08 : 0.9);
+                const playerModel = CAR_MODELS[state.playerModelIndex];
+                const playerMass = playerModel.mass ?? 1.0;
+                const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
+                const crashDamage = (agent.speed + playerSpeedMag) * (agent.unitType === "suv" ? 1.08 : 0.9) / playerMass;
                 damagePlayer(crashDamage, "crash");
                 audio?.crash();
-                state.player.speed *= agent.unitType === "suv" ? 0.34 : 0.45;
+                const dampFwd = agent.unitType === "suv" ? 0.34 : 0.45;
+                state.player.vx *= dampFwd;
+                state.player.vz *= dampFwd;
+                state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
+                state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
                 agent.speed *= agent.unitType === "motorcycle" ? 0.12 : 0.35;
                 spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
-                if (agent.unitType === "motorcycle" && Math.abs(state.player.speed) > 8) {
+                if (agent.unitType === "motorcycle" && playerSpeedMag > 8) {
                     retiredAgents.push(agent);
                     setStatus("Motorrad-Einheit ausgeschaltet.", 1.2);
                 }
@@ -676,6 +779,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
 
         state.wanted.status = state.wanted.level <= 0 ? "CLEAR" : near ? "CHASE" : "SEARCH";
+
+        let nearestDist = Infinity;
+        for (const agent of police) {
+            const d = distanceTo(agent.x, agent.z);
+            if (d < nearestDist) nearestDist = d;
+        }
+        state.nearestPoliceDistance = nearestDist;
     }
 
     function updateRoadblocks(dt) {
@@ -977,21 +1087,61 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function updateCamera(dt) {
         const player = state.player;
+
+        // Slow orbit for menu / garage screens
+        if (state.screen === "menu" || state.screen === "garage") {
+            const t = performance.now() * 0.00025;
+            const orbitR = 58;
+            const targetX = Math.cos(t) * orbitR;
+            const targetZ = Math.sin(t) * orbitR;
+            tempTarget.set(targetX, 42, targetZ);
+            camera.position.lerp(tempTarget, Math.min(1, dt * 1.2));
+            camera.lookAt(0, 0, 0);
+            const targetFov = CONFIG.camera.fovBase;
+            camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 2);
+            camera.updateProjectionMatrix();
+            return;
+        }
+
         const forwardX = Math.sin(player.rotation);
         const forwardZ = Math.cos(player.rotation);
-        const speedLift = Math.min(6, Math.abs(player.speed) * 0.18);
+        const latX = Math.cos(player.rotation);
+        const latZ = -Math.sin(player.rotation);
+        const speedMag = player.speedMag ?? Math.abs(player.speed);
+        const maxSpeed = (CAR_MODELS[state.playerModelIndex]?.maxSpeed ?? 22) * 1.3;
+        const speedRatio = Math.min(1, speedMag / maxSpeed);
+
+        // Lateral velocity lean — camera shifts slightly in slide direction
+        const vx = player.vx ?? 0;
+        const vz = player.vz ?? 0;
+        const latSpeed = vx * latX + vz * latZ;
+        const leanX = latX * latSpeed * 0.06;
+        const leanZ = latZ * latSpeed * 0.06;
+
+        const speedLift = Math.min(3.5, speedMag * 0.1);
         tempTarget.set(
-            player.x - forwardX * CONFIG.camera.backOffset,
+            player.x - forwardX * CONFIG.camera.backOffset + leanX,
             CONFIG.camera.height + speedLift,
-            player.z - forwardZ * CONFIG.camera.backOffset
+            player.z - forwardZ * CONFIG.camera.backOffset + leanZ
         );
         camera.position.lerp(tempTarget, Math.min(1, dt * CONFIG.camera.followLerp));
+
         if (state.cameraShake > 0) {
             state.cameraShake = Math.max(0, state.cameraShake - dt * 2.8);
-            camera.position.x += (Math.random() - 0.5) * state.cameraShake;
-            camera.position.z += (Math.random() - 0.5) * state.cameraShake;
+            camera.position.x += (Math.random() - 0.5) * state.cameraShake * 1.2;
+            camera.position.z += (Math.random() - 0.5) * state.cameraShake * 1.2;
         }
-        camera.lookAt(player.x + forwardX * Math.abs(player.speed) * 0.2, 0, player.z + forwardZ * Math.abs(player.speed) * 0.2);
+
+        // Dynamic FOV — widens with speed for rush feeling
+        const targetFov = CONFIG.camera.fovBase + speedRatio * (CONFIG.camera.fovMax - CONFIG.camera.fovBase);
+        camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 2.8);
+        camera.updateProjectionMatrix();
+
+        camera.lookAt(
+            player.x + forwardX * speedMag * 0.22,
+            0,
+            player.z + forwardZ * speedMag * 0.22
+        );
     }
 
     function spawnPickup() {
@@ -1470,28 +1620,70 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function addSkidMark() {
-        if (skidMarks.length > 80) {
+        if (skidMarks.length > 160) {
             const old = skidMarks.shift();
             scene.remove(old.mesh);
         }
+        const driftIntensity = Math.min(1, state.player.drift);
+        const markWidth = 0.32 + driftIntensity * 0.14;
         const mark = new THREE.Mesh(
-            new THREE.BoxGeometry(0.18, 0.018, 1.5),
-            createMaterial("#060708", { roughness: 1, transparent: true, opacity: 0.38 })
+            new THREE.BoxGeometry(markWidth, 0.018, 2.1),
+            createMaterial("#040506", { roughness: 1, transparent: true, opacity: 0.48 })
         );
-        mark.position.set(state.player.x - Math.sin(state.player.rotation) * 1.6, 0.13, state.player.z - Math.cos(state.player.rotation) * 1.6);
+        const rearX = state.player.x - Math.sin(state.player.rotation) * 1.7;
+        const rearZ = state.player.z - Math.cos(state.player.rotation) * 1.7;
+        mark.position.set(rearX, 0.13, rearZ);
         mark.rotation.y = state.player.rotation;
         scene.add(mark);
-        skidMarks.push({ mesh: mark, life: 5 });
+        skidMarks.push({ mesh: mark, life: 16 });
     }
 
     function updateSkidMarks(dt) {
         for (let index = skidMarks.length - 1; index >= 0; index -= 1) {
             skidMarks[index].life -= dt;
-            skidMarks[index].mesh.material.opacity = Math.max(0, skidMarks[index].life / 5) * 0.38;
+            skidMarks[index].mesh.material.opacity = Math.max(0, skidMarks[index].life / 16) * 0.48;
             if (skidMarks[index].life <= 0) {
                 scene.remove(skidMarks[index].mesh);
                 skidMarks.splice(index, 1);
             }
+        }
+    }
+
+    function spawnPopup(text, type = "normal") {
+        state.popup = { text, timer: 1.6, type };
+    }
+
+    function spawnDriftSmoke(x, z) {
+        const mesh = new THREE.Mesh(
+            new THREE.SphereGeometry(0.22 + Math.random() * 0.18, 6, 6),
+            createMaterial("#c8cdd6", { roughness: 1, transparent: true, opacity: 0.28 })
+        );
+        mesh.position.set(x, 0.28, z);
+        scene.add(mesh);
+        particles.push({
+            mesh,
+            vx: (Math.random() - 0.5) * 1.4,
+            vy: 0.8 + Math.random() * 0.7,
+            vz: (Math.random() - 0.5) * 1.4,
+            life: 0.6 + Math.random() * 0.5,
+            age: 0,
+            smoke: true,
+        });
+    }
+
+    function triggerNearMiss() {
+        const nearMiss = state.nearMiss;
+        nearMiss.count += 1;
+        nearMiss.streak += 1;
+        nearMiss.timer = 8;
+        nearMiss.streakTimer = 6;
+        const earned = Math.round(80 + state.combo.chain * 5);
+        addScore(earned);
+        spawnParticle(state.player.x, state.player.z, "#ffc64d", 6);
+        spawnPopup(`CLOSE! +${earned}`, "nearMiss");
+        audio?.nearMiss?.();
+        if (nearMiss.streak >= 3) {
+            setStatus(`Near-Miss Streak x${nearMiss.streak}! Tempo behalten.`, 1.4);
         }
     }
 
@@ -1520,12 +1712,23 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 particles.splice(index, 1);
                 continue;
             }
-            particle.vy -= 12 * dt;
-            particle.mesh.position.x += particle.vx * dt;
-            particle.mesh.position.y += particle.vy * dt;
-            particle.mesh.position.z += particle.vz * dt;
-            particle.mesh.scale.setScalar(1 - particle.age / particle.life);
-            particle.mesh.material.opacity = 1 - particle.age / particle.life;
+            const t = particle.age / particle.life;
+            if (particle.smoke) {
+                particle.vx *= 0.96;
+                particle.vz *= 0.96;
+                particle.mesh.position.x += particle.vx * dt;
+                particle.mesh.position.y += particle.vy * dt;
+                particle.mesh.position.z += particle.vz * dt;
+                particle.mesh.scale.setScalar(1 + t * 1.8);
+                particle.mesh.material.opacity = 0.28 * (1 - t);
+            } else {
+                particle.vy -= 12 * dt;
+                particle.mesh.position.x += particle.vx * dt;
+                particle.mesh.position.y += particle.vy * dt;
+                particle.mesh.position.z += particle.vz * dt;
+                particle.mesh.scale.setScalar(1 - t);
+                particle.mesh.material.opacity = 1 - t;
+            }
         }
     }
 

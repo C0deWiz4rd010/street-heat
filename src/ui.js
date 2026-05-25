@@ -94,6 +94,8 @@ export function mountHud(root) {
             </div>
         </div>
 
+        <div id="speedLines"></div>
+        <div id="popup"></div>
         <div id="actionPrompt"></div>
         <div id="status">Direkt im Spiel. Fahre los.</div>
         <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>G Garage | F3 Debug | R Neustart</div>
@@ -192,6 +194,8 @@ export function mountHud(root) {
         upgradeStatus: document.getElementById("upgradeStatus"),
         minimap,
         mapContext: minimap.getContext("2d"),
+        speedLines: document.getElementById("speedLines"),
+        popup: document.getElementById("popup"),
         actionPrompt: document.getElementById("actionPrompt"),
         status: document.getElementById("status"),
         pauseOverlay: document.getElementById("pauseOverlay"),
@@ -264,6 +268,24 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.status.style.opacity = state.statusTimer > 0 ? "1" : "0.78";
     ui.actionPrompt.textContent = state.actionPrompt;
     ui.actionPrompt.classList.toggle("show", Boolean(state.actionPrompt));
+
+    // Popup flash (near-miss, drift, etc.)
+    const popup = state.popup;
+    if (popup && popup.timer > 0) {
+        ui.popup.textContent = popup.text;
+        ui.popup.className = `popup-show popup-${popup.type}`;
+        ui.popup.style.opacity = String(Math.min(1, popup.timer * 2));
+    } else {
+        ui.popup.className = "";
+        ui.popup.textContent = "";
+    }
+
+    // Speed lines overlay
+    const speedMag = state.screen === "playing" ? (player.speedMag ?? Math.abs(player.speed)) : 0;
+    const selectedCarMaxSpeed = selectedCar.maxSpeed * 1.15;
+    const speedRatio = Math.min(1, speedMag / selectedCarMaxSpeed);
+    const linesOpacity = speedRatio > 0.6 ? ((speedRatio - 0.6) / 0.4) * 0.72 : 0;
+    ui.speedLines.style.opacity = linesOpacity.toFixed(2);
     ui.pauseOverlay.classList.toggle("show", state.paused && state.screen === "playing");
     ui.mainMenu.classList.toggle("show", state.screen === "menu");
     ui.garagePanel.classList.toggle("show", state.screen === "garage");

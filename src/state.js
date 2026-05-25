@@ -21,9 +21,13 @@ export function createInitialState() {
             z: 0,
             rotation: 0,
             speed: 0,
+            vx: 0,
+            vz: 0,
+            speedMag: 0,
             health: 100,
             nitro: 18,
             drift: 0,
+            driftSessionScore: 0,
             inShortcut: false,
         },
         wanted: {

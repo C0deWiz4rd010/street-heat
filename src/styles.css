@@ -365,6 +365,45 @@ canvas.game-canvas {
     z-index: 20;
 }
 
+#speedLines {
+    background: radial-gradient(ellipse 55% 60% at center, transparent 48%, rgba(180, 210, 255, 0.06) 70%, rgba(140, 180, 255, 0.12) 100%);
+    inset: 0;
+    opacity: 0;
+    pointer-events: none;
+    position: fixed;
+    transition: opacity 0.22s ease;
+    z-index: 5;
+}
+
+#popup {
+    font-size: 36px;
+    font-weight: 950;
+    left: 50%;
+    letter-spacing: -0.5px;
+    pointer-events: none;
+    position: fixed;
+    text-align: center;
+    text-shadow: 0 2px 24px rgba(0, 0, 0, 0.7);
+    top: 38%;
+    transform: translateX(-50%) translateY(-50%);
+    transition: opacity 0.15s ease;
+    z-index: 30;
+}
+
+#popup.popup-nearMiss {
+    color: #ffc64d;
+    text-shadow: 0 0 32px rgba(255, 198, 77, 0.7);
+}
+
+#popup.popup-drift {
+    color: #c9a5ff;
+    text-shadow: 0 0 32px rgba(201, 165, 255, 0.7);
+}
+
+#popup.popup-normal {
+    color: #ffffff;
+}
+
 #actionPrompt {
     backdrop-filter: blur(18px);
     background: rgba(255, 198, 77, 0.13);
