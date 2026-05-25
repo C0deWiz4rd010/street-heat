@@ -26,6 +26,7 @@ export function mountHud(root) {
                     <div id="missionTitle">Street Run</div>
                     <div id="missionText">Sammle Beute und bleib in Bewegung.</div>
                     <div class="mission-target" id="missionTarget">Ziel wird markiert</div>
+                    <div class="mission-bonus" id="missionBonus">Bonusziel wird geladen</div>
                     <div class="progress-track">
                         <div class="progress-fill" id="missionFill"></div>
                     </div>
@@ -169,6 +170,7 @@ export function mountHud(root) {
         missionTitle: document.getElementById("missionTitle"),
         missionText: document.getElementById("missionText"),
         missionTarget: document.getElementById("missionTarget"),
+        missionBonus: document.getElementById("missionBonus"),
         missionFill: document.getElementById("missionFill"),
         speed: document.getElementById("speed"),
         stars: document.getElementById("stars"),
@@ -281,51 +283,53 @@ function renderMissionHud(ui, state) {
     const mission = state.mission;
     const timer = Math.max(0, Math.ceil(mission.timer));
     const target = currentMissionTarget(state);
+    const bonusProgress = formatMissionBonus(mission);
     ui.missionTarget.textContent = target
         ? `Ziel: ${target.name} | ${Math.round(distanceTo(state.player, target))} m`
         : "Ziel: offene Strassen";
+    ui.missionBonus.textContent = bonusProgress;
 
     if (mission.type === "pickup") {
-        ui.missionTitle.textContent = `Mission ${mission.stage}: Street Run`;
-        ui.missionText.textContent = `Sammle ${mission.target} Pickups. Fortschritt ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
+        ui.missionText.textContent = `${mission.description} Fortschritt ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
         ui.missionFill.style.width = `${mission.progress / mission.target * 100}%`;
         return;
     }
 
     if (mission.type === "delivery") {
-        ui.missionTitle.textContent = `Mission ${mission.stage}: Lieferung`;
+        ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
         ui.missionText.textContent = mission.cargo
-            ? `Bring das Paket zu ${mission.to.name}. Zeit ${timer}s.`
-            : `Hole das Paket beim ${mission.from.name}. Zeit ${timer}s.`;
+            ? `${mission.description} Ziel ${mission.to.name}. Zeit ${timer}s.`
+            : `${mission.description} Treffpunkt ${mission.from.name}. Zeit ${timer}s.`;
         ui.missionFill.style.width = mission.cargo ? "55%" : "20%";
         return;
     }
 
     if (mission.type === "checkpoint") {
-        ui.missionTitle.textContent = `Mission ${mission.stage}: Expressroute`;
-        ui.missionText.textContent = `Fahre Checkpoints ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
+        ui.missionText.textContent = `${mission.description} ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
         ui.missionFill.style.width = `${mission.progress / mission.target * 100}%`;
         return;
     }
 
     if (mission.type === "pursuit") {
-        ui.missionTitle.textContent = `Mission ${mission.stage}: Jagdfieber`;
-        ui.missionText.textContent = `Sammle knappe Ausweichmanoever ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
+        ui.missionText.textContent = `${mission.description} ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
         ui.missionFill.style.width = `${mission.progress / mission.target * 100}%`;
         return;
     }
 
     if (mission.type === "heist") {
-        ui.missionTitle.textContent = `Mission ${mission.stage}: Heist Run`;
+        ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
         ui.missionText.textContent = mission.cargo
-            ? `Bring die Beute zum ${mission.to.name}. Zeit ${timer}s.`
-            : `Knacke den ${mission.from.name}. Zeit ${timer}s.`;
+            ? `${mission.description} Ziel ${mission.to.name}. Zeit ${timer}s.`
+            : `${mission.description} Einstieg ${mission.from.name}. Zeit ${timer}s.`;
         ui.missionFill.style.width = mission.cargo ? "62%" : "22%";
         return;
     }
 
-    ui.missionTitle.textContent = `Mission ${mission.stage}: Fluchtzone`;
-    ui.missionText.textContent = `Erreiche ${mission.to.name}, bevor die Zeit faellt. Zeit ${timer}s.`;
+    ui.missionTitle.textContent = `${mission.chainName} ${mission.chainStep}/${mission.chainLength}`;
+    ui.missionText.textContent = `${mission.description} Ziel ${mission.to.name}. Zeit ${timer}s.`;
     ui.missionFill.style.width = `${clamp(1 - mission.timer / (34 + mission.stage * 4), 0, 1) * 100}%`;
 }
 
@@ -496,8 +500,16 @@ function drawMapRing(ctx, state, cx, cy, scale, width, height, x, z, color) {
     ctx.stroke();
 }
 
+function formatMissionBonus(mission) {
+    const bonus = mission.bonus;
+    if (!bonus) return "Bonusziel: offline";
+    const complete = bonus.completed ? "Done" : `${bonus.progress}/${bonus.target}`;
+    return `Bonus: ${bonus.label} | ${complete} | $${bonus.reward}`;
+}
+
 function currentMissionTarget(state) {
     const mission = state.mission;
+    if (mission.type === "pickup") return mission.to;
     if (mission.type === "delivery" || mission.type === "heist") return mission.cargo ? mission.to : mission.from;
     if (mission.type === "escape") return mission.to;
     if (mission.type === "checkpoint") return mission.route[mission.routeIndex] ?? null;

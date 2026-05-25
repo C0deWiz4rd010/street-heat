@@ -54,6 +54,8 @@ assert.equal(state.upgrades.engine, 2);
 assert.equal(state.achievements.includes("firstMission"), true);
 assert.equal(state.lifetime.pickups, 9);
 assert.equal(state.time.phase, "day");
+assert.equal(state.player.inShortcut, false);
+assert.equal(typeof state.mission.bonus.id, "string");
 
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);

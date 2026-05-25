@@ -52,6 +52,12 @@ Die Umsetzung erfolgt in drei Wellen:
 - Garage zeigt Achievements zusaetzlich zu Fuhrpark und Upgrades
 - Logic-Smoke-Test prueft nun auch Contracts, Achievements und EMP-Konfiguration
 
+## Weitere Erweiterungen am 2026-05-26
+- Bezirksgebundene Missionsketten mit rotierenden 3er-Boegen fuer Downtown, Industrie, Park und Hafenzone
+- Missionen haben jetzt thematische Bonusziele wie Tempo, saubere Fahrt, Shortcut-Nutzung, hohes Heat-Finish oder garagefreien Abschluss
+- Bezirks-Pickup-Missionen markieren ihre Zielzone und seed-en passende Pickups im relevanten Stadtteil
+- Missions-HUD zeigt Bonusziel, Fortschritt und klarere Auftragstitel direkt im Run
+
 ## Priorisierte Problemstellen
 1. Ressourcenverwaltung:
 Gemeinsam genutzte Geometry- und Material-Objekte duerfen nicht beim Entfernen einzelner Instanzen disposed werden.

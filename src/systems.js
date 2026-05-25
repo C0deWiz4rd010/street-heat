@@ -5,6 +5,35 @@ import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createCar, createMaterial, replaceCarModel } from "./vehicles.js";
 import { insideBuilding, obstacleAt, pushOutBuildings, snapStreet } from "./world.js";
 
+const MISSION_DISTRICT_ORDER = ["downtown", "industrial", "park", "harbor"];
+
+const DISTRICT_MISSION_POINTS = {
+    downtown: [
+        { name: "Skyline Nord", x: 41, z: 47 },
+        { name: "Bankpassage", x: 16, z: 38 },
+        { name: "Boulevard Mitte", x: 38, z: 16 },
+        { name: "Tower Arc", x: 50, z: 28 },
+    ],
+    industrial: [
+        { name: "Werkhof", x: -42, z: 44 },
+        { name: "Containerbogen", x: -15, z: 18 },
+        { name: "Rostkurve", x: -46, z: 16 },
+        { name: "Schienenkante", x: -22, z: 46 },
+    ],
+    park: [
+        { name: "Nordweg", x: 41, z: -48 },
+        { name: "Pavillon", x: 15, z: -41 },
+        { name: "Wiesenbogen", x: 48, z: -17 },
+        { name: "Seerand", x: 24, z: -18 },
+    ],
+    harbor: [
+        { name: "Dock West", x: -48, z: -41 },
+        { name: "Kranlinie", x: -22, z: -48 },
+        { name: "Pier Ost", x: -16, z: -21 },
+        { name: "Slip-Rampe", x: -44, z: -15 },
+    ],
+};
+
 export function createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights }) {
     const pickups = [];
     const police = [];
@@ -40,6 +69,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.player.health = getMaxHealth();
         state.player.nitro = 24;
         state.player.drift = 0;
+        state.player.inShortcut = false;
         state.wanted.level = 0;
         state.wanted.status = "CLEAR";
         state.wanted.decay = 0;
@@ -85,7 +115,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.time.timer = 72;
         state.time.cycle = 0;
         state.district = getDistrictAt(0, 0);
-        setMission(1);
         setStatus(options.showMenu ? "Waehle einen Run oder pruefe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
         hideGameOver(ui);
 
@@ -103,6 +132,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         clearEntities(skidMarks);
         clearEntities(rainDrops);
 
+        setMission(1);
         for (let index = 0; index < CONFIG.pickups.startCount; index += 1) spawnPickup();
         for (let index = 0; index < CONFIG.traffic.startCount; index += 1) spawnTraffic();
         applyWeatherVisuals();
@@ -170,54 +200,42 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function setMission(stage) {
-        const typeIndex = (stage - 1) % 6;
+        const chainStage = (stage - 1) % 3;
+        const districtId = MISSION_DISTRICT_ORDER[Math.floor((stage - 1) / 3) % MISSION_DISTRICT_ORDER.length];
+        const missionConfig = buildMissionConfig(stage, districtId, chainStage);
+        const missionDistrict = DISTRICTS.find((district) => district.id === districtId) ?? DISTRICTS[0];
         state.mission.stage = stage;
         state.mission.progress = 0;
         state.mission.cargo = false;
         state.mission.route = [];
         state.mission.routeIndex = 0;
-        state.mission.timer = 62 + stage * 5;
+        state.mission.type = missionConfig.type;
+        state.mission.target = missionConfig.target;
+        state.mission.timer = missionConfig.timer;
+        state.mission.startTimer = missionConfig.timer;
+        state.mission.from = missionConfig.from ?? null;
+        state.mission.to = missionConfig.to ?? null;
+        state.mission.route = missionConfig.route ?? [];
+        state.mission.routeIndex = 0;
+        state.mission.districtId = missionDistrict.id;
+        state.mission.districtName = missionDistrict.name;
+        state.mission.chainName = missionConfig.title;
+        state.mission.chainStep = chainStage + 1;
+        state.mission.chainLength = 3;
+        state.mission.description = missionConfig.description;
+        state.mission.collisionCount = 0;
+        state.mission.repairCount = 0;
+        state.mission.shortcutEntries = 0;
+        state.mission.bonus = {
+            ...missionConfig.bonus,
+            progress: missionConfig.bonus.id === "quickFinish" ? missionConfig.timer : 0,
+            completed: false,
+        };
 
-        if (typeIndex === 0) {
-            state.mission.type = "pickup";
-            state.mission.target = 3 + stage;
-            state.mission.from = null;
-            state.mission.to = null;
-        } else if (typeIndex === 1) {
-            state.mission.type = "delivery";
-            state.mission.target = 1;
-            state.mission.from = getPoi("depot");
-            state.mission.to = getPoi(stage % 2 ? "garage" : "fuel");
-            state.mission.timer = 58 + stage * 6;
-        } else if (typeIndex === 2) {
-            state.mission.type = "checkpoint";
-            state.mission.target = Math.min(5, 3 + Math.floor(stage / 4));
-            state.mission.route = chooseRoute(stage, state.mission.target);
-            state.mission.to = state.mission.route[0];
-            state.mission.from = null;
-            state.mission.timer = 48 + stage * 5;
-        } else if (typeIndex === 3) {
-            state.mission.type = "pursuit";
-            state.mission.target = 3 + Math.floor(stage / 3);
-            state.mission.from = null;
-            state.mission.to = null;
-            state.mission.timer = 42 + stage * 4;
-            updateWanted(Math.max(state.wanted.level, 2 + Math.floor(stage / 4)));
-        } else if (typeIndex === 4) {
-            state.mission.type = "heist";
-            state.mission.target = 1;
-            state.mission.from = getPoi("precinct");
-            state.mission.to = getPoi("safehouse");
-            state.mission.timer = 54 + stage * 5;
-            updateWanted(Math.max(state.wanted.level, 3));
-        } else {
-            state.mission.type = "escape";
-            state.mission.target = 1;
-            state.mission.from = null;
-            state.mission.to = getPoi("safehouse");
-            state.mission.timer = 34 + stage * 4;
-            updateWanted(Math.max(state.wanted.level, Math.min(4, 1 + Math.floor(stage / 2))));
-        }
+        if (missionConfig.route?.length) state.mission.to = missionConfig.route[0];
+        if (missionConfig.pickupSeed) seedMissionDistrictPickups(missionDistrict, missionConfig.pickupSeed);
+        if (missionConfig.minimumHeat) updateWanted(Math.max(state.wanted.level, missionConfig.minimumHeat));
+        updateMissionBonusProgress();
     }
 
     function updatePlayer(dt, input) {
@@ -307,7 +325,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             player.speed *= hitBuilding ? 0.34 : obstacleDamping;
             if (impact > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
-                damagePlayer(impact * (hitBuilding ? 0.8 : obstacleDamageScale));
+                damagePlayer(impact * (hitBuilding ? 0.8 : obstacleDamageScale), "crash");
                 state.cameraShake = Math.min(1, Math.max(impact * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
                 spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : (destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d"), destroyedReaction?.particleCount ?? 18);
             }
@@ -315,6 +333,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         player.x = next.x;
         player.z = next.z;
+        const nextShortcut = getDistrictAt(player.x, player.z).id === "park" && isInsideShortcutZone(player.x, player.z);
+        if (nextShortcut && !player.inShortcut) state.mission.shortcutEntries += 1;
+        player.inShortcut = nextShortcut;
         playerCar.position.set(player.x, 0.38, player.z);
         playerCar.rotation.y = player.rotation;
 
@@ -323,6 +344,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function updateMission(dt) {
         state.mission.timer -= dt;
+        updateMissionBonusProgress();
         if (state.mission.timer <= 0) {
             damagePlayer(16);
             setStatus("Mission verpasst. Neue Chance, aber Karosserie leidet.", 2.6);
@@ -369,16 +391,33 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function completeMission() {
+        updateMissionBonusProgress();
+        const bonus = state.mission.bonus;
+        const bonusAchieved = Boolean(bonus?.completed);
         const reward = 850 + state.mission.stage * 230 + (state.mission.type === "heist" ? 600 : 0);
         addScore(reward, true);
         const cashGain = addCash(Math.floor(reward * 0.34));
+        let bonusCash = 0;
+        if (bonusAchieved) {
+            addScore(bonus.reward, true);
+            bonusCash = addCash(Math.round(bonus.reward * 0.72));
+        }
+        let chainCash = 0;
+        if (state.mission.chainStep === state.mission.chainLength) {
+            addScore(340 + state.mission.stage * 45, true);
+            chainCash = addCash(180 + state.mission.stage * 35);
+        }
         state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 30);
         state.stats.missions += 1;
         state.lifetime.missions += 1;
         if (state.wanted.level <= 2) state.stats.missionsLowHeat += 1;
         refreshProgress();
         audio?.mission();
-        setStatus(`Mission ${state.mission.stage} abgeschlossen. Bonus $${cashGain}.`, 3);
+        const missionName = state.mission.chainName;
+        const statusParts = [`${missionName} abgeschlossen.`, `Bank +$${cashGain}`];
+        if (bonusCash > 0) statusParts.push(`Bonus +$${bonusCash}`);
+        if (chainCash > 0) statusParts.push(`Chain +$${chainCash}`);
+        setStatus(statusParts.join(" "), 3);
         setMission(state.mission.stage + 1);
     }
 
@@ -420,7 +459,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         pickups.splice(index, 1);
 
         if (state.mission.type === "pickup") {
-            state.mission.progress += 1;
+            if (pickup.districtId === state.mission.districtId) {
+                state.mission.progress += 1;
+            } else {
+                setStatus(`${info.label} gesichert, aber der Auftrag laeuft in ${state.mission.districtName}.`, 1.2);
+            }
             if (state.mission.progress >= state.mission.target) completeMission();
         }
     }
@@ -444,7 +487,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             car.mesh.position.set(car.x, 0.35, car.z);
             if (distanceSq(state.player.x, state.player.z, car.x, car.z) < CONFIG.traffic.collisionRadius * CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
                 car.cooldown = 1.1;
-                damagePlayer(Math.abs(state.player.speed) * 0.55 + 5);
+            damagePlayer(Math.abs(state.player.speed) * 0.55 + 5, "crash");
                 audio?.crash();
                 state.player.speed *= 0.42;
                 spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
@@ -523,7 +566,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
             if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
-                damagePlayer((Math.abs(agent.speed) + Math.abs(state.player.speed)) * 0.9);
+                damagePlayer((Math.abs(agent.speed) + Math.abs(state.player.speed)) * 0.9, "crash");
                 audio?.crash();
                 state.player.speed *= 0.45;
                 agent.speed *= 0.35;
@@ -555,7 +598,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
             if (distanceSq(state.player.x, state.player.z, block.x, block.z) < (block.radius + CONFIG.player.radius) ** 2 && block.cooldown <= 0) {
                 block.cooldown = 1.4;
-                damagePlayer(10 + Math.abs(state.player.speed) * 0.65);
+                damagePlayer(10 + Math.abs(state.player.speed) * 0.65, "hazard");
                 state.player.speed *= 0.22;
                 state.cameraShake = Math.max(state.cameraShake, 0.55);
                 state.stats.roadblocks += 1;
@@ -588,7 +631,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             hazard.mesh.material.opacity = Math.max(0.18, hazard.life / hazard.maxLife);
             if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
                 if (hazard.type === "debris") {
-                    damagePlayer((hazard.damage ?? 3.5) + Math.abs(state.player.speed) * 0.18);
+                    damagePlayer((hazard.damage ?? 3.5) + Math.abs(state.player.speed) * 0.18, "hazard");
                     state.player.speed *= hazard.slowdown ?? 0.58;
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
                     setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
@@ -597,19 +640,19 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         hazards.splice(index, 1);
                     }
                 } else if (hazard.type === "fallenLamp") {
-                    damagePlayer(5 + Math.abs(state.player.speed) * 0.28);
+                    damagePlayer(5 + Math.abs(state.player.speed) * 0.28, "hazard");
                     state.player.speed *= hazard.slowdown ?? 0.44;
                     state.cameraShake = Math.max(state.cameraShake, 0.28);
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#ffe08a", 12);
                     setStatus("Gefallene Laterne blockiert die Spur.", 1.4);
                 } else if (hazard.type === "closureBarrier") {
-                    damagePlayer(6 + Math.abs(state.player.speed) * 0.34);
+                    damagePlayer(6 + Math.abs(state.player.speed) * 0.34, "hazard");
                     state.player.speed *= 0.22;
                     state.cameraShake = Math.max(state.cameraShake, 0.32);
                     spawnParticle(hazard.x, hazard.z, "#ff9c45", 14);
                     setStatus("Sperrung blockiert die Route.", 1.4);
                 } else {
-                    damagePlayer(7 + Math.abs(state.player.speed) * 0.45);
+                    damagePlayer(7 + Math.abs(state.player.speed) * 0.45, "hazard");
                     state.player.speed *= 0.28;
                     state.player.nitro = Math.max(0, state.player.nitro - 32);
                     spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
@@ -649,7 +692,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (state.helicopter.pressure >= 1 && state.helicopter.cooldown <= 0) {
             state.helicopter.cooldown = 3.4;
             state.helicopter.pressure = 0.38;
-            damagePlayer(9);
+            damagePlayer(9, "air");
             updateWanted(5);
             state.cameraShake = Math.max(state.cameraShake, 0.25);
             spawnParticle(state.player.x, state.player.z, "#f7fbff", 18);
@@ -675,6 +718,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         if (nearGarage && state.garageCooldown <= 0) {
             if (state.player.health < getMaxHealth() || state.player.nitro < getNitroMax() - 4) {
+                state.mission.repairCount += 1;
                 state.player.health = Math.min(getMaxHealth(), state.player.health + 18);
                 state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 20);
                 state.garageCooldown = 3.5;
@@ -1365,8 +1409,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
-    function damagePlayer(amount) {
+    function damagePlayer(amount, source = "generic") {
         if (!state.running) return;
+        if (source === "crash" || source === "hazard") state.mission.collisionCount += 1;
         const mitigated = amount * (1 - state.upgrades.armor * 0.075);
         state.player.health -= mitigated;
         state.cameraShake = Math.max(state.cameraShake, mitigated * 0.02);
@@ -1638,12 +1683,211 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         saveProfile(state.profile);
     }
 
-    function chooseRoute(stage, count) {
+    function buildMissionConfig(stage, districtId, chainStage) {
+        const stageScale = Math.floor((stage - 1) / 3);
+        const district = DISTRICTS.find((entry) => entry.id === districtId) ?? DISTRICTS[0];
+
+        if (districtId === "downtown") {
+            if (chainStage === 0) {
+                return {
+                    type: "delivery",
+                    title: "Downtown Warm-up",
+                    description: "Kurierfahrt durch die engen Straassenschluchten.",
+                    target: 1,
+                    timer: 50 + stageScale * 4,
+                    from: { name: "Courier Hub", x: 18, z: 40 },
+                    to: { name: "Skyline Drop", x: 47, z: 19 },
+                    bonus: { id: "quickFinish", label: "Tempo-Bonus", description: "Schliesse frueh ab.", target: 20, reward: 220 },
+                };
+            }
+            if (chainStage === 1) {
+                return {
+                    type: "checkpoint",
+                    title: "Neon Line",
+                    description: "Nimm die Boulevard-Linie durch Downtown.",
+                    target: 3 + Math.min(2, stageScale),
+                    timer: 46 + stageScale * 4,
+                    route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
+                    bonus: { id: "noCrash", label: "Saubere Linie", description: "Ohne Einschlag bleiben.", target: 1, reward: 240 },
+                };
+            }
+            return {
+                type: "pursuit",
+                title: "Blue Light Bait",
+                description: "Zieh die Verfolger durch die Hochhauskanten.",
+                target: 3 + stageScale,
+                timer: 40 + stageScale * 4,
+                minimumHeat: 2 + Math.min(2, stageScale),
+                bonus: { id: "highHeat", label: "Heisses Finale", description: "Mit Heat 3+ abschliessen.", target: 3, reward: 280 },
+            };
+        }
+
+        if (districtId === "industrial") {
+            if (chainStage === 0) {
+                return {
+                    type: "pickup",
+                    title: "Scrapyard Sweep",
+                    description: "Sichere Teile im Industriebezirk.",
+                    target: 3 + stageScale,
+                    timer: 54 + stageScale * 4,
+                    to: createDistrictAnchor(district),
+                    pickupSeed: 4,
+                    bonus: { id: "noRepair", label: "Werkstattverbot", description: "Keine Garage waehrend des Auftrags.", target: 1, reward: 210 },
+                };
+            }
+            if (chainStage === 1) {
+                return {
+                    type: "delivery",
+                    title: "Parts Run",
+                    description: "Bring den Werkstatt-Transfer aus dem Yard raus.",
+                    target: 1,
+                    timer: 52 + stageScale * 4,
+                    from: getPoi("yard"),
+                    to: getPoi("depot"),
+                    bonus: { id: "quickFinish", label: "Schichtende", description: "Unter Zeitdruck liefern.", target: 18, reward: 240 },
+                };
+            }
+            return {
+                type: "heist",
+                title: "Foundry Grab",
+                description: "Zieh heisse Ware aus dem Rostguerel und bring sie raus.",
+                target: 1,
+                timer: 48 + stageScale * 4,
+                from: { name: "Schmelzhof", x: -18, z: 22 },
+                to: getPoi("safehouse"),
+                minimumHeat: 3,
+                bonus: { id: "noCrash", label: "Keine Dellen", description: "Ohne Einschlag rausfahren.", target: 1, reward: 300 },
+            };
+        }
+
+        if (districtId === "park") {
+            if (chainStage === 0) {
+                return {
+                    type: "checkpoint",
+                    title: "Green Drift",
+                    description: "Zieh die Route ueber Wege und Wiesenlinien.",
+                    target: 3 + Math.min(2, stageScale),
+                    timer: 50 + stageScale * 4,
+                    route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
+                    bonus: { id: "shortcut", label: "Shortcut-Line", description: "Nutze Parkwege mehrfach.", target: 2, reward: 230 },
+                };
+            }
+            if (chainStage === 1) {
+                return {
+                    type: "pickup",
+                    title: "Nitro Bloom",
+                    description: "Raeum mobile Caches im Parkbecken ab.",
+                    target: 3 + stageScale,
+                    timer: 48 + stageScale * 4,
+                    to: createDistrictAnchor(district),
+                    pickupSeed: 4,
+                    bonus: { id: "shortcut", label: "Pfadfinder", description: "Bleib ueber die Park-Cuts in Bewegung.", target: 2, reward: 220 },
+                };
+            }
+            return {
+                type: "escape",
+                title: "Quiet Exit",
+                description: "Bring den Run sauber zur Garage, bevor Heat zuschnappt.",
+                target: 1,
+                timer: 38 + stageScale * 4,
+                to: getPoi("garage"),
+                minimumHeat: 1 + Math.min(2, stageScale),
+                bonus: { id: "noCrash", label: "Soft Touch", description: "Ohne Einschlag zur Ausfahrt.", target: 1, reward: 260 },
+            };
+        }
+
+        if (chainStage === 0) {
+            return {
+                type: "delivery",
+                title: "Dock Runner",
+                description: "Schmuggelware aus der Hafenzone herausziehen.",
+                target: 1,
+                timer: 48 + stageScale * 4,
+                from: { name: "Pier Safe", x: -44, z: -19 },
+                to: getPoi("safehouse"),
+                minimumHeat: 2,
+                bonus: { id: "highHeat", label: "Heisse Route", description: "Mit Heat 3+ abgeben.", target: 3, reward: 280 },
+            };
+        }
+        if (chainStage === 1) {
+            return {
+                type: "checkpoint",
+                title: "Crane Loop",
+                description: "Spring die Dock-Linie von Rampe zu Rampe ab.",
+                target: 3 + Math.min(2, stageScale),
+                timer: 44 + stageScale * 4,
+                route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
+                bonus: { id: "quickFinish", label: "Schnelle Uebergabe", description: "Mit Zeitreserve beenden.", target: 16, reward: 250 },
+            };
+        }
+        return {
+            type: "escape",
+            title: "Breakwater Exit",
+            description: "Schuettel den Druck ab und bring den Run heim.",
+            target: 1,
+            timer: 36 + stageScale * 4,
+            to: getPoi("safehouse"),
+            minimumHeat: 3,
+            bonus: { id: "highHeat", label: "Harter Cut", description: "Mit Heat 4+ rauskommen.", target: 4, reward: 320 },
+        };
+    }
+
+    function createDistrictAnchor(district) {
+        return {
+            name: `${district.name} Zone`,
+            x: district.x * CONFIG.map.size * 0.3,
+            z: district.z * CONFIG.map.size * 0.3,
+        };
+    }
+
+    function getDistrictWaypointRoute(districtId, count, stage) {
+        const points = DISTRICT_MISSION_POINTS[districtId] ?? DISTRICT_MISSION_POINTS.downtown;
         const route = [];
-        for (let offset = 0; route.length < count && offset < POIS.length; offset += 1) {
-            route.push(POIS[(stage + offset) % POIS.length]);
+        for (let index = 0; index < count; index += 1) {
+            const point = points[(stage + index) % points.length];
+            route.push({ ...point });
         }
         return route;
+    }
+
+    function seedMissionDistrictPickups(district, count) {
+        const preferred = Object.entries(district.pickupWeights ?? {})
+            .sort((left, right) => right[1] - left[1])
+            .map(([key]) => key)
+            .filter((type) => type !== "intel");
+        for (let index = 0; index < count; index += 1) {
+            if (pickups.length >= CONFIG.pickups.maxCount + 4) break;
+            const type = preferred[index % preferred.length] ?? "cash";
+            const { x, z } = sampleDistrictSpawnPosition(district, district.id === "park", district.id !== "downtown");
+            createPickupAt(type, x, z, district);
+        }
+    }
+
+    function updateMissionBonusProgress() {
+        const bonus = state.mission.bonus;
+        if (!bonus) return;
+        if (bonus.id === "quickFinish") {
+            bonus.progress = Math.max(0, Math.ceil(state.mission.timer));
+            bonus.completed = bonus.progress >= bonus.target;
+            return;
+        }
+        if (bonus.id === "highHeat") {
+            bonus.progress = Math.min(bonus.target, state.wanted.level);
+            bonus.completed = state.wanted.level >= bonus.target;
+            return;
+        }
+        if (bonus.id === "shortcut") {
+            bonus.progress = Math.min(bonus.target, state.mission.shortcutEntries);
+            bonus.completed = state.mission.shortcutEntries >= bonus.target;
+            return;
+        }
+        if (bonus.id === "noRepair") {
+            bonus.progress = state.mission.repairCount === 0 ? 1 : 0;
+            bonus.completed = state.mission.repairCount === 0;
+            return;
+        }
+        bonus.progress = state.mission.collisionCount === 0 ? 1 : 0;
+        bonus.completed = state.mission.collisionCount === 0;
     }
 
     function destroyObstacle(obstacle, impact) {
