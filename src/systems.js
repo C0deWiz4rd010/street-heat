@@ -397,7 +397,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             z: clamp(player.z + player.vz * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
         };
 
+        // Save pre-pushout position to derive collision normal for wall sliding
+        const preX = next.x;
+        const preZ = next.z;
         const hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
+
         const hitObstacle = obstacleAt(world, next.x, next.z, CONFIG.player.radius);
         let destroyedReaction = null;
         if (hitObstacle) {
@@ -412,20 +416,52 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             }
         }
 
-        if (hitBuilding || hitObstacle) {
+        if (hitBuilding) {
+            const impactMag = player.speedMag;
+            // Derive surface normal from pushout displacement
+            const dispX = next.x - preX;
+            const dispZ = next.z - preZ;
+            const dispLen = Math.sqrt(dispX * dispX + dispZ * dispZ);
+            if (dispLen > 0.001) {
+                const wallNx = dispX / dispLen;
+                const wallNz = dispZ / dispLen;
+                const velDotN = player.vx * wallNx + player.vz * wallNz;
+                if (velDotN < 0) {
+                    // Reflect: remove inward component, small bounce, keep tangential slide
+                    const restitution = 0.12 + mass * 0.06;
+                    player.vx -= (1 + restitution) * velDotN * wallNx;
+                    player.vz -= (1 + restitution) * velDotN * wallNz;
+                    // Tangential friction so player doesn't slide forever
+                    player.vx *= 0.82;
+                    player.vz *= 0.82;
+                }
+            } else {
+                const dampFactor = Math.min(0.50, 0.22 + mass * 0.18);
+                player.vx *= dampFactor;
+                player.vz *= dampFactor;
+            }
+            player.speed = newFwdX * player.vx + newFwdZ * player.vz;
+            player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
+            if (impactMag > 5) {
+                damagePlayer(impactMag * 0.8 / (mass * 0.75 + 0.25), "crash");
+                state.cameraShake = Math.min(1, impactMag * 0.045);
+                spawnParticle(next.x, next.z, "#ff6a4f", 16);
+            }
+        }
+
+        if (hitObstacle) {
             const impactMag = player.speedMag;
             const obstacleDamping = destroyedReaction?.speedDamping ?? hitObstacle?.speedDamping ?? 0.34;
-            const massRetention = Math.min(0.88, 0.28 + mass * 0.28);
-            const dampFactor = hitBuilding ? Math.min(0.52, 0.22 + mass * 0.18) : Math.min(obstacleDamping + mass * 0.14, 0.72);
+            const dampFactor = Math.min(obstacleDamping + mass * 0.14, 0.72);
             player.vx *= dampFactor;
             player.vz *= dampFactor;
             player.speed = newFwdX * player.vx + newFwdZ * player.vz;
             player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
             if (impactMag > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
-                damagePlayer(impactMag * (hitBuilding ? 0.8 : obstacleDamageScale) / (mass * 0.75 + 0.25), "crash");
+                damagePlayer(impactMag * obstacleDamageScale / (mass * 0.75 + 0.25), "crash");
                 state.cameraShake = Math.min(1, Math.max(impactMag * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
-                spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : (destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d"), destroyedReaction?.particleCount ?? 18);
+                spawnParticle(next.x, next.z, destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d", destroyedReaction?.particleCount ?? 18);
             }
         }
 
@@ -576,54 +612,178 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
+    function resolveTrafficSeparation() {
+        for (let i = 0; i < traffic.length; i++) {
+            const a = traffic[i];
+            for (let j = i + 1; j < traffic.length; j++) {
+                const b = traffic[j];
+                const dx = b.x - a.x;
+                const dz = b.z - a.z;
+                const d2 = dx * dx + dz * dz;
+                const minDist = (a.radius ?? 2.1) + (b.radius ?? 2.1);
+                if (d2 >= minDist * minDist || d2 < 0.0001) continue;
+
+                const dist = Math.sqrt(d2);
+                const nx = dx / dist;
+                const nz = dz / dist;
+                const overlap = minDist - dist;
+                const massA = a.model?.mass ?? 1.0;
+                const massB = b.model?.mass ?? 1.0;
+                const total = massA + massB;
+
+                a.x -= nx * overlap * (massB / total);
+                a.z -= nz * overlap * (massB / total);
+                b.x += nx * overlap * (massA / total);
+                b.z += nz * overlap * (massA / total);
+
+                const avx = a.axis === "x" ? a.speed * a.direction + a.pushVx : a.pushVx;
+                const avz = a.axis === "z" ? a.speed * a.direction + a.pushVz : a.pushVz;
+                const bvx = b.axis === "x" ? b.speed * b.direction + b.pushVx : b.pushVx;
+                const bvz = b.axis === "z" ? b.speed * b.direction + b.pushVz : b.pushVz;
+                const relVn = (bvx - avx) * nx + (bvz - avz) * nz;
+
+                if (relVn < 0) {
+                    const impulse = -0.55 * relVn;
+                    a.pushVx -= (impulse * nx) / massA;
+                    a.pushVz -= (impulse * nz) / massA;
+                    b.pushVx += (impulse * nx) / massB;
+                    b.pushVz += (impulse * nz) / massB;
+                    a.speed = Math.max(0, a.speed - Math.abs(relVn) * 0.35);
+                    b.speed = Math.max(0, b.speed - Math.abs(relVn) * 0.35);
+                }
+            }
+        }
+    }
+
     function updateTraffic(dt) {
+        const playerModel = CAR_MODELS[state.playerModelIndex];
+        const playerMass = playerModel.mass ?? 1.0;
+        const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
+        const pushDecay = Math.max(0, 1 - dt * 5.5);
+
         for (const car of traffic) {
             car.cooldown = Math.max(0, car.cooldown - dt);
-            const move = car.speed * car.direction * dt;
-            if (car.axis === "x") car.x += move;
-            else car.z += move;
-            if (car.headlights) {
-                const headlightIntensity = state.time.phase === "night" ? 0.85 : state.weather.mode === "fog" ? 0.55 : 0.2;
-                for (const light of car.headlights) light.material.emissiveIntensity = headlightIntensity;
+            car.nearMissCooldown = Math.max(0, car.nearMissCooldown - dt);
+
+            // Recover speed toward natural cruise speed
+            if (car.speed < car.naturalSpeed) {
+                car.speed = Math.min(car.naturalSpeed, car.speed + dt * 2.2);
             }
 
+            // Decay transient push velocity
+            car.pushVx *= pushDecay;
+            car.pushVz *= pushDecay;
+
+            // Axis-direction movement + any push
+            const axisVx = car.axis === "x" ? car.speed * car.direction : 0;
+            const axisVz = car.axis === "z" ? car.speed * car.direction : 0;
+            car.x += (axisVx + car.pushVx) * dt;
+            car.z += (axisVz + car.pushVz) * dt;
+
+            // Building collision — traffic can be knocked into walls by player
+            const trafficPos = { x: car.x, z: car.z };
+            if (pushOutBuildings(world, trafficPos, car.radius ?? 2.1)) {
+                car.x = trafficPos.x;
+                car.z = trafficPos.z;
+                car.speed *= 0.55;
+                car.pushVx *= 0.3;
+                car.pushVz *= 0.3;
+            }
+
+            // Map wrap
             if (car.x > CONFIG.map.size / 2 + 6) car.x = -CONFIG.map.size / 2 - 6;
             if (car.x < -CONFIG.map.size / 2 - 6) car.x = CONFIG.map.size / 2 + 6;
             if (car.z > CONFIG.map.size / 2 + 6) car.z = -CONFIG.map.size / 2 - 6;
             if (car.z < -CONFIG.map.size / 2 - 6) car.z = CONFIG.map.size / 2 + 6;
 
             car.mesh.position.set(car.x, 0.35, car.z);
-            const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
-            const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
-            const model = CAR_MODELS[state.playerModelIndex];
-            const mass = model.mass ?? 1.0;
 
-            // Near-miss detection
+            // Smoothly rotate mesh to face actual velocity direction when pushed
+            const totalVx = axisVx + car.pushVx;
+            const totalVz = axisVz + car.pushVz;
+            const totalSpeed = Math.sqrt(totalVx * totalVx + totalVz * totalVz);
+            if (totalSpeed > 0.5) {
+                const targetAngle = Math.atan2(totalVx, totalVz);
+                let angleDiff = targetAngle - car.mesh.rotation.y;
+                while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
+                while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
+                car.mesh.rotation.y += angleDiff * Math.min(1, dt * 6.5);
+            }
+
+            if (car.headlights) {
+                const headlightIntensity = state.time.phase === "night" ? 0.85 : state.weather.mode === "fog" ? 0.55 : 0.2;
+                for (const light of car.headlights) light.material.emissiveIntensity = headlightIntensity;
+            }
+
+            const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
+
+            // Near-miss
             if (distToPlayer > CONFIG.traffic.collisionRadius && distToPlayer < CONFIG.traffic.collisionRadius + 2.8 && playerSpeedMag > 8) {
-                car.nearMissCooldown = (car.nearMissCooldown ?? 0);
                 if (car.nearMissCooldown <= 0) {
                     car.nearMissCooldown = 2.2;
                     triggerNearMiss();
                 }
             }
-            car.nearMissCooldown = Math.max(0, (car.nearMissCooldown ?? 0) - dt);
 
+            // Player ↔ Traffic: impulse-based momentum exchange
             if (distToPlayer < CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
-                car.cooldown = 1.1;
+                car.cooldown = 0.75;
                 const trafficMass = car.model?.mass ?? 1.0;
-                const massRatio = trafficMass / mass;
-                const impactDamage = playerSpeedMag * (0.45 * massRatio) + (massRatio > 1.1 ? 2.5 : 5.5) / mass;
-                damagePlayer(impactDamage, "crash");
-                audio?.crash();
-                const velocityRetain = Math.min(0.72, 0.34 + mass * 0.22);
-                state.player.vx *= velocityRetain;
-                state.player.vz *= velocityRetain;
-                state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
-                state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
-                spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
-                updateWanted(state.wanted.level + 1);
+
+                // Collision normal pointing from traffic toward player
+                const dx = state.player.x - car.x;
+                const dz = state.player.z - car.z;
+                const dist = Math.sqrt(dx * dx + dz * dz) || 0.01;
+                const nx = dx / dist;
+                const nz = dz / dist;
+
+                // Full traffic velocity (axis + push)
+                const tvx = axisVx + car.pushVx;
+                const tvz = axisVz + car.pushVz;
+
+                // Relative velocity along normal
+                const relVn = (state.player.vx - tvx) * nx + (state.player.vz - tvz) * nz;
+
+                if (relVn < 0) {
+                    const restitution = 0.32;
+                    const impulse = -(1 + restitution) * relVn / (1 / playerMass + 1 / trafficMass);
+
+                    // Apply impulse to player
+                    state.player.vx += (impulse / playerMass) * nx;
+                    state.player.vz += (impulse / playerMass) * nz;
+
+                    // Apply impulse to traffic car as push velocity
+                    car.pushVx -= (impulse / trafficMass) * nx;
+                    car.pushVz -= (impulse / trafficMass) * nz;
+                    car.speed *= 0.72;
+
+                    // Separation push
+                    const overlap = CONFIG.traffic.collisionRadius - distToPlayer;
+                    const totalMass = playerMass + trafficMass;
+                    state.player.x += nx * overlap * (trafficMass / totalMass);
+                    state.player.z += nz * overlap * (trafficMass / totalMass);
+                    car.x -= nx * overlap * (playerMass / totalMass);
+                    car.z -= nz * overlap * (playerMass / totalMass);
+
+                    // Damage proportional to closing speed
+                    const impactSpeed = Math.abs(relVn);
+                    if (impactSpeed > 2.5) {
+                        const dmg = impactSpeed * 0.48 * (trafficMass / playerMass);
+                        damagePlayer(dmg, "crash");
+                        audio?.crash();
+                        state.cameraShake = Math.min(0.85, impactSpeed * 0.045);
+                        spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
+                        updateWanted(state.wanted.level + 1);
+                    }
+
+                    state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
+                    state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
+                }
             }
         }
+
+        // Resolve all traffic-traffic overlaps after movement
+        resolveTrafficSeparation();
     }
 
     function updateScannerZones(dt) {
@@ -743,21 +903,65 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 agent.deployCooldown = 10;
             }
 
+            // Police scatters nearby traffic cars out of the way
+            for (const car of traffic) {
+                const tdx = car.x - agent.x;
+                const tdz = car.z - agent.z;
+                const td2 = tdx * tdx + tdz * tdz;
+                const tMin = (car.radius ?? 2.1) + 1.3;
+                if (td2 < tMin * tMin && td2 > 0.01) {
+                    const tdist = Math.sqrt(td2);
+                    const tnx = tdx / tdist;
+                    const tnz = tdz / tdist;
+                    const tOverlap = tMin - tdist;
+                    car.x += tnx * tOverlap * 0.55;
+                    car.z += tnz * tOverlap * 0.55;
+                    const pushStr = Math.min(tOverlap * 3.8, 7);
+                    car.pushVx += tnx * pushStr;
+                    car.pushVz += tnz * pushStr;
+                }
+            }
+
             if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
                 const playerModel = CAR_MODELS[state.playerModelIndex];
                 const playerMass = playerModel.mass ?? 1.0;
                 const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
-                const crashDamage = (agent.speed + playerSpeedMag) * (agent.unitType === "suv" ? 1.08 : 0.9) / playerMass;
-                damagePlayer(crashDamage, "crash");
-                audio?.crash();
-                const dampFwd = agent.unitType === "suv" ? 0.34 : 0.45;
-                state.player.vx *= dampFwd;
-                state.player.vz *= dampFwd;
+                const agentMass = agent.unitType === "van" ? 1.9 : agent.unitType === "suv" ? 1.65 : agent.unitType === "motorcycle" ? 0.62 : 1.1;
+
+                // Collision normal
+                const cdx = state.player.x - agent.x;
+                const cdz = state.player.z - agent.z;
+                const cdist = Math.sqrt(cdx * cdx + cdz * cdz) || 0.01;
+                const cnx = cdx / cdist;
+                const cnz = cdz / cdist;
+
+                // Police velocity in world space
+                const policeVx = Math.sin(agent.rotation) * agent.speed;
+                const policeVz = Math.cos(agent.rotation) * agent.speed;
+                const relVn = (state.player.vx - policeVx) * cnx + (state.player.vz - policeVz) * cnz;
+
+                if (relVn < 0) {
+                    const restitution = 0.28;
+                    const impulse = -(1 + restitution) * relVn / (1 / playerMass + 1 / agentMass);
+                    state.player.vx += (impulse / playerMass) * cnx;
+                    state.player.vz += (impulse / playerMass) * cnz;
+                    agent.speed *= agent.unitType === "motorcycle" ? 0.12 : 0.42;
+                }
+
+                const impactSpeed = Math.abs(relVn);
+                const typeFactor = agent.unitType === "suv" ? 1.1 : agent.unitType === "van" ? 1.2 : agent.unitType === "motorcycle" ? 0.7 : 0.9;
+                const crashDamage = impactSpeed * typeFactor * (agentMass / playerMass) * 0.5;
+                if (crashDamage > 0.5) {
+                    damagePlayer(crashDamage, "crash");
+                    audio?.crash();
+                    state.cameraShake = Math.min(0.9, impactSpeed * 0.05);
+                    spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
+                }
+
                 state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
                 state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
-                agent.speed *= agent.unitType === "motorcycle" ? 0.12 : 0.35;
-                spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
+
                 if (agent.unitType === "motorcycle" && playerSpeedMag > 8) {
                     retiredAgents.push(agent);
                     setStatus("Motorrad-Einheit ausgeschaltet.", 1.2);
@@ -1129,12 +1333,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             CONFIG.camera.height + speedLift,
             player.z - forwardZ * CONFIG.camera.backOffset + leanZ
         );
-        camera.position.lerp(tempTarget, Math.min(1, dt * CONFIG.camera.followLerp));
+        // Tighter follow at high speed, floatier at low speed
+        const adaptiveLerp = CONFIG.camera.followLerp * (0.65 + speedRatio * 0.6);
+        camera.position.lerp(tempTarget, Math.min(1, dt * adaptiveLerp));
 
         if (state.cameraShake > 0) {
-            state.cameraShake = Math.max(0, state.cameraShake - dt * 2.8);
-            camera.position.x += (Math.random() - 0.5) * state.cameraShake * 1.2;
-            camera.position.z += (Math.random() - 0.5) * state.cameraShake * 1.2;
+            state.cameraShake = Math.max(0, state.cameraShake - dt * 3.2);
+            const shakeTime = performance.now() * 0.018;
+            camera.position.x += Math.sin(shakeTime * 7.3) * state.cameraShake * 0.55;
+            camera.position.z += Math.sin(shakeTime * 5.9 + 1.2) * state.cameraShake * 0.55;
         }
 
         // Dynamic FOV — widens with speed for rush feeling
@@ -1345,7 +1552,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const headlights = addAmbientHeadlights(mesh, model);
         scene.add(mesh);
         const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
-        traffic.push({ mesh, x, z, axis, direction, speed: baseSpeed + Math.random() * 3.2, model, cooldown: 0, districtId: district.id, headlights });
+        const naturalSpeed = baseSpeed + Math.random() * 3.2;
+        const carRadius = ((model.length ?? 4.2) * 0.42 + (model.width ?? 2.0) * 0.5) * 0.5;
+        traffic.push({ mesh, x, z, axis, direction, speed: naturalSpeed, naturalSpeed, pushVx: 0, pushVz: 0, radius: carRadius, model, cooldown: 0, nearMissCooldown: 0, districtId: district.id, headlights });
     }
 
     function chooseTrafficDistrict() {
