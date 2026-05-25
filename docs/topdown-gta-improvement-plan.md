@@ -1,5 +1,9 @@
 # Topdown GTA Improvement Plan
 
+## Aktive Agenten-Referenz
+- Laufender Detailplan fuer den inhaltlichen Ausbau: `docs/game-expansion-roadmap.md`
+- Umsetzung erfolgt ab jetzt Schritt fuer Schritt entlang dieses Dokuments, beginnend mit Welt und Stadtgefuehl.
+
 ## Summary
 Das Projekt ist aktuell ein spielbarer Three.js-Prototyp in einer einzelnen HTML-Datei. Ziel dieses Dokuments ist es, die technische Stabilisierung, die Modularisierung und den spaeteren Feature-Ausbau in eine klare Umsetzungsreihenfolge zu bringen.
 
