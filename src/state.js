@@ -85,6 +85,12 @@ export function createInitialState() {
             timer: 32,
             intensity: 0,
         },
+        time: {
+            phase: "day",
+            label: "Tag",
+            timer: 70,
+            cycle: 0,
+        },
         worldEvent: {
             active: false,
             label: "Ruhige Strassen",

@@ -224,7 +224,8 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.speed.textContent = Math.round(Math.abs(player.speed) * 12);
     ui.carName.textContent = selectedCar.name;
     ui.districtName.textContent = state.district?.name ?? "Downtown";
-    ui.weatherName.textContent = state.weather?.label ?? "Klar";
+    const timeLabel = state.time?.label ?? "Tag";
+    ui.weatherName.textContent = `${timeLabel} | ${state.weather?.label ?? "Klar"}`;
 
     const healthMax = CONFIG.player.maxHealth + state.upgrades.armor * 18;
     const nitroMax = CONFIG.player.nitroMax + state.upgrades.nitro * 18;
@@ -408,6 +409,7 @@ function renderDebug(ui, state, groups) {
     ui.debugPanel.innerHTML = `
         FPS ${Math.round(state.debug.fps)}<br>
         Entities ${entityCount}<br>
+        Zeit ${state.time.label}<br>
         Weather ${state.weather.label}<br>
         Heat ${state.wanted.level} ${state.wanted.tier}<br>
         Heli ${state.helicopter.active ? state.helicopter.pressure.toFixed(2) : "off"}<br>
@@ -421,7 +423,14 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
     const height = ui.minimap.height;
     const cx = width / 2;
     const cy = height / 2;
-    const scale = Math.min(width, height) / (CONFIG.ui.minimapRange * 2);
+    const visibility = state.weather?.mode === "fog"
+        ? 0.68
+        : state.weather?.mode === "storm"
+            ? 0.82
+            : 1;
+    const timeRangeFactor = state.time?.phase === "night" ? 0.88 : 1;
+    const minimapRange = CONFIG.ui.minimapRange * visibility * timeRangeFactor;
+    const scale = Math.min(width, height) / (minimapRange * 2);
 
     ctx.clearRect(0, 0, width, height);
     ctx.fillStyle = "#091017";

@@ -73,7 +73,7 @@ export const DISTRICTS = [
         eventScoreMultiplier: 1.22,
         eventHeatBonus: 1,
         pickupWeights: { cash: 0.24, repair: 0.11, nitro: 0.14, intel: 0.15, parts: 0.12, emp: 0.24 },
-        eventWeights: { cashDrop: 0.22, partsCache: 0.14, hotVan: 0.64 },
+        eventWeights: { cashDrop: 0.1, partsCache: 0.08, hotVan: 0.3, roadClosure: 0.14, vipConvoy: 0.22, streetRace: 0.08, hiddenCache: 0.08 },
     },
     {
         id: "park",
@@ -92,7 +92,7 @@ export const DISTRICTS = [
         eventScoreMultiplier: 1,
         eventHeatBonus: 0,
         pickupWeights: { cash: 0.17, repair: 0.1, nitro: 0.39, intel: 0.12, parts: 0.06, emp: 0.16 },
-        eventWeights: { cashDrop: 0.46, partsCache: 0.36, hotVan: 0.18 },
+        eventWeights: { cashDrop: 0.18, partsCache: 0.12, hotVan: 0.08, roadClosure: 0.06, vipConvoy: 0.08, streetRace: 0.28, hiddenCache: 0.2 },
     },
     {
         id: "industrial",
@@ -111,7 +111,7 @@ export const DISTRICTS = [
         eventScoreMultiplier: 1,
         eventHeatBonus: 0,
         pickupWeights: { cash: 0.14, repair: 0.26, nitro: 0.12, intel: 0.1, parts: 0.3, emp: 0.08 },
-        eventWeights: { cashDrop: 0.24, partsCache: 0.54, hotVan: 0.22 },
+        eventWeights: { cashDrop: 0.1, partsCache: 0.26, hotVan: 0.18, roadClosure: 0.24, vipConvoy: 0.06, streetRace: 0.04, hiddenCache: 0.12 },
     },
     {
         id: "downtown",
@@ -130,7 +130,7 @@ export const DISTRICTS = [
         eventScoreMultiplier: 1.08,
         eventHeatBonus: 0,
         pickupWeights: { cash: 0.34, repair: 0.11, nitro: 0.14, intel: 0.13, parts: 0.14, emp: 0.14 },
-        eventWeights: { cashDrop: 0.5, partsCache: 0.16, hotVan: 0.34 },
+        eventWeights: { cashDrop: 0.24, partsCache: 0.08, hotVan: 0.18, roadClosure: 0.08, vipConvoy: 0.18, streetRace: 0.14, hiddenCache: 0.1 },
     },
 ];
 
@@ -138,12 +138,17 @@ export const WEATHER_MODES = {
     clear: { label: "Klar", grip: 1, visibility: 1, color: "#111720" },
     rain: { label: "Regen", grip: 0.82, visibility: 0.92, color: "#101924" },
     fog: { label: "Nebel", grip: 0.94, visibility: 0.72, color: "#18202a" },
+    storm: { label: "Gewitter", grip: 0.86, visibility: 0.84, color: "#0d1520" },
 };
 
 export const WORLD_EVENTS = [
-    { id: "cashDrop", label: "Cash Drop", color: "#ffc64d", score: 500, cash: 260, heat: 1 },
-    { id: "partsCache", label: "Teilelager", color: "#c9a5ff", score: 380, cash: 120, heal: 24, heat: 0 },
-    { id: "hotVan", label: "Geldtransporter", color: "#ff6a4f", score: 760, cash: 420, heat: 2 },
+    { id: "cashDrop", label: "Cash Drop", color: "#ffc64d", score: 500, cash: 260, heat: 1, kind: "pickup" },
+    { id: "partsCache", label: "Teilelager", color: "#c9a5ff", score: 380, cash: 120, heal: 24, heat: 0, kind: "pickup" },
+    { id: "hotVan", label: "Geldtransporter", color: "#ff6a4f", score: 760, cash: 420, heat: 2, kind: "convoy", speed: 5.4 },
+    { id: "roadClosure", label: "Strassensperrung", color: "#ff9c45", score: 560, cash: 280, heat: 2, kind: "closure" },
+    { id: "vipConvoy", label: "VIP-Konvoi", color: "#7fd6ff", score: 920, cash: 520, heat: 3, kind: "convoy", speed: 6.2 },
+    { id: "streetRace", label: "Illegales Rennen", color: "#79ffb3", score: 700, cash: 340, heat: 2, kind: "race", speed: 8.1 },
+    { id: "hiddenCache", label: "Versteckte Teilekiste", color: "#b988ff", score: 460, cash: 150, heal: 18, heat: 0, kind: "stash" },
 ];
 
 export const CONTRACTS = [

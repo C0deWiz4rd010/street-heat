@@ -19,9 +19,15 @@ assert.ok(DISTRICTS.every((district) => district.traffic > 0), "district traffic
 assert.ok(DISTRICTS.every((district) => district.cashMultiplier > 0), "district cash multipliers must stay positive");
 assert.ok(DISTRICTS.every((district) => district.eventRate > 0), "district event rates must stay positive");
 assert.ok(DISTRICTS.every((district) => district.pickupWeights && district.eventWeights), "district effect tables must be configured");
+assert.ok(DISTRICTS.every((district) => Object.keys(district.eventWeights).length >= 6), "districts should support the expanded event pool");
 assert.equal(HEAT_TIERS.length, 6, "heat tiers should cover levels 0-5");
 assert.ok(Object.values(WEATHER_MODES).every((weather) => weather.grip > 0 && weather.grip <= 1), "weather grip values must be usable");
+assert.ok(WEATHER_MODES.storm, "storm weather mode must exist");
 assert.ok(WORLD_EVENTS.every((event) => event.score > 0), "world events need score rewards");
+assert.ok(WORLD_EVENTS.some((event) => event.id === "vipConvoy" && event.kind === "convoy"), "vip convoy event must exist");
+assert.ok(WORLD_EVENTS.some((event) => event.id === "streetRace" && event.kind === "race"), "street race event must exist");
+assert.ok(WORLD_EVENTS.some((event) => event.id === "roadClosure" && event.kind === "closure"), "road closure event must exist");
+assert.ok(WORLD_EVENTS.some((event) => event.id === "hiddenCache" && event.kind === "stash"), "hidden cache event must exist");
 assert.ok(CONTRACTS.every((contract) => contract.target > 0 && contract.reward > 0), "contracts need targets and rewards");
 assert.ok(ACHIEVEMENTS.every((achievement) => achievement.target > 0 && achievement.reward > 0), "achievements need targets and rewards");
 assert.equal(PICKUP_TYPES.emp.emp, true, "EMP pickup must be configured");
@@ -47,6 +53,7 @@ assert.equal(state.playerModelIndex, 1);
 assert.equal(state.upgrades.engine, 2);
 assert.equal(state.achievements.includes("firstMission"), true);
 assert.equal(state.lifetime.pickups, 9);
+assert.equal(state.time.phase, "day");
 
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);

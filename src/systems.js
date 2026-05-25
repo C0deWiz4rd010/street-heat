@@ -5,7 +5,7 @@ import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createCar, createMaterial, replaceCarModel } from "./vehicles.js";
 import { insideBuilding, obstacleAt, pushOutBuildings, snapStreet } from "./world.js";
 
-export function createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio }) {
+export function createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights }) {
     const pickups = [];
     const police = [];
     const traffic = [];
@@ -74,10 +74,16 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.worldEvent.active = false;
         state.worldEvent.label = "Ruhige Strassen";
         state.worldEvent.timer = 14;
+        state.worldEvent.x = 0;
+        state.worldEvent.z = 0;
         state.weather.mode = "clear";
         state.weather.label = WEATHER_MODES.clear.label;
         state.weather.timer = 28;
         state.weather.intensity = 0;
+        state.time.phase = "day";
+        state.time.label = "Tag";
+        state.time.timer = 72;
+        state.time.cycle = 0;
         state.district = getDistrictAt(0, 0);
         setMission(1);
         setStatus(options.showMenu ? "Waehle einen Run oder pruefe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
@@ -118,6 +124,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         if (!state.running || state.paused || state.screen !== "playing") {
             updateParticles(dt);
+            updateTimeOfDay(dt, true);
             updateWeather(dt, true);
             updateCamera(dt);
             audio?.update(state, dt);
@@ -129,6 +136,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updatePlayer(dt, input);
         updateMission(dt);
         updateDistrict();
+        updateTimeOfDay(dt);
         updateWeather(dt);
         updateWorldEvents(dt);
         updatePickups(dt);
@@ -423,6 +431,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const move = car.speed * car.direction * dt;
             if (car.axis === "x") car.x += move;
             else car.z += move;
+            if (car.headlights) {
+                const headlightIntensity = state.time.phase === "night" ? 0.85 : state.weather.mode === "fog" ? 0.55 : 0.2;
+                for (const light of car.headlights) light.material.emissiveIntensity = headlightIntensity;
+            }
 
             if (car.x > CONFIG.map.size / 2 + 6) car.x = -CONFIG.map.size / 2 - 6;
             if (car.x < -CONFIG.map.size / 2 - 6) car.x = CONFIG.map.size / 2 + 6;
@@ -443,6 +455,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function updatePolice(dt) {
         const heatTier = getHeatTier();
+        const visibilityFactor = getPoliceVisibilityFactor();
         state.wanted.emp = Math.max(0, state.wanted.emp - dt);
         const targetPolice = Math.max(0, heatTier.police - (state.wanted.emp > 0 ? 6 : 0));
         while (police.length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
@@ -455,7 +468,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const dx = state.player.x - agent.x;
             const dz = state.player.z - agent.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < 34) near = true;
+            if (dist < 34 * visibilityFactor) near = true;
             if (dist < 7 && Math.abs(state.player.speed) > 9 && agent.closeCooldown <= 0) {
                 agent.closeCooldown = 2.5;
                 state.stats.closeCalls += 1;
@@ -469,7 +482,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 addScore(45 + state.wanted.level * 12);
             }
 
-            if (dist < CONFIG.police.searchDistance && state.wanted.level > 0) {
+            if (dist < CONFIG.police.searchDistance * visibilityFactor && state.wanted.level > 0) {
                 agent.state = "chase";
                 agent.lastX = state.player.x;
                 agent.lastZ = state.player.z;
@@ -490,7 +503,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
             agent.rotation += Math.sign(diff) * Math.min(Math.abs(diff), (2.1 + state.wanted.level * 0.35) * dt);
-            agent.targetSpeed = agent.state === "chase" ? 11 + state.wanted.level * 1.6 + (agent.heavy ? -1 : 1.2) : 8;
+            agent.targetSpeed = agent.state === "chase"
+                ? 11 + state.wanted.level * 1.6 + (agent.heavy ? -1 : 1.2) + (state.time.phase === "night" ? 0.8 : 0)
+                : 8;
             agent.speed += (agent.targetSpeed - agent.speed) * dt * 2.4;
 
             const next = {
@@ -572,13 +587,36 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             hazard.life -= dt;
             hazard.mesh.material.opacity = Math.max(0.18, hazard.life / hazard.maxLife);
             if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
-                damagePlayer(7 + Math.abs(state.player.speed) * 0.45);
-                state.player.speed *= 0.28;
-                state.player.nitro = Math.max(0, state.player.nitro - 32);
-                spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
-                setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
-                scene.remove(hazard.mesh);
-                hazards.splice(index, 1);
+                if (hazard.type === "debris") {
+                    damagePlayer((hazard.damage ?? 3.5) + Math.abs(state.player.speed) * 0.18);
+                    state.player.speed *= hazard.slowdown ?? 0.58;
+                    spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
+                    setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
+                    if (hazard.consumeOnHit !== false) {
+                        scene.remove(hazard.mesh);
+                        hazards.splice(index, 1);
+                    }
+                } else if (hazard.type === "fallenLamp") {
+                    damagePlayer(5 + Math.abs(state.player.speed) * 0.28);
+                    state.player.speed *= hazard.slowdown ?? 0.44;
+                    state.cameraShake = Math.max(state.cameraShake, 0.28);
+                    spawnParticle(hazard.x, hazard.z, hazard.color ?? "#ffe08a", 12);
+                    setStatus("Gefallene Laterne blockiert die Spur.", 1.4);
+                } else if (hazard.type === "closureBarrier") {
+                    damagePlayer(6 + Math.abs(state.player.speed) * 0.34);
+                    state.player.speed *= 0.22;
+                    state.cameraShake = Math.max(state.cameraShake, 0.32);
+                    spawnParticle(hazard.x, hazard.z, "#ff9c45", 14);
+                    setStatus("Sperrung blockiert die Route.", 1.4);
+                } else {
+                    damagePlayer(7 + Math.abs(state.player.speed) * 0.45);
+                    state.player.speed *= 0.28;
+                    state.player.nitro = Math.max(0, state.player.nitro - 32);
+                    spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
+                    setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
+                    scene.remove(hazard.mesh);
+                    hazards.splice(index, 1);
+                }
                 continue;
             }
             if (hazard.life <= 0) {
@@ -605,7 +643,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         helicopter.userData.rotor.rotation.y += dt * 18;
 
         const inCone = distanceSq(state.player.x, state.player.z, state.helicopter.x, state.helicopter.z) < 15 * 15;
-        state.helicopter.pressure = clamp(state.helicopter.pressure + (inCone ? dt * 0.28 : -dt * 0.18), 0, 1);
+        const searchlightPressure = state.time.phase === "night" ? 0.4 : 0.28;
+        state.helicopter.pressure = clamp(state.helicopter.pressure + (inCone ? dt * searchlightPressure : -dt * 0.18), 0, 1);
         state.helicopter.cooldown = Math.max(0, state.helicopter.cooldown - dt);
         if (state.helicopter.pressure >= 1 && state.helicopter.cooldown <= 0) {
             state.helicopter.cooldown = 3.4;
@@ -675,6 +714,25 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
+    function updateTimeOfDay(dt, passive = false) {
+        if (passive) return;
+        state.time.timer -= dt;
+        if (state.time.timer > 0) return;
+
+        const nextPhase = state.time.phase === "day" ? "night" : "day";
+        state.time.phase = nextPhase;
+        state.time.label = nextPhase === "night" ? "Nacht" : "Tag";
+        state.time.timer = nextPhase === "night" ? 56 : 74;
+        state.time.cycle += 1;
+        applyWeatherVisuals();
+        setStatus(
+            nextPhase === "night"
+                ? "Nacht faellt ein. Mehr Neon, mehr Suchlichter, hoehere Event-Auszahlungen."
+                : "Morgengrauen. Sicht wird stabiler und die Stadt beruhigt sich etwas.",
+            2.8
+        );
+    }
+
     function updateWeather(dt, passive = false) {
         state.weather.timer -= dt;
         if (state.weather.timer <= 0 && !passive) {
@@ -689,51 +747,64 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             setStatus(`Wetterwechsel: ${state.weather.label}.`, 1.8);
         }
 
-        if (state.weather.mode === "rain") {
-            for (let i = 0; i < 3; i += 1) {
+        if (state.weather.mode === "rain" || state.weather.mode === "storm") {
+            const rainBursts = state.weather.mode === "storm" ? 5 : 3;
+            for (let i = 0; i < rainBursts; i += 1) {
                 spawnRainDrop(
                     state.player.x + (Math.random() - 0.5) * 54,
                     state.player.z + (Math.random() - 0.5) * 54
                 );
             }
         }
+        if (
+            !passive &&
+            state.weather.mode === "storm" &&
+            pickups.length < CONFIG.pickups.maxCount &&
+            Math.random() < dt * 0.16
+        ) {
+            const { x, z } = sampleDistrictSpawnPosition(state.district, false, true);
+            createPickupAt("emp", x, z, state.district);
+            setStatus("Gewitterfenster: EMP-Signal im Bezirk aufgetaucht.", 1.6);
+        }
         updateRain(dt);
     }
 
     function updateWorldEvents(dt) {
         if (!state.worldEvent.active) {
-            state.worldEvent.timer -= dt * (state.district?.eventRate ?? 1);
+            const nightRate = state.time.phase === "night" ? 1.15 : 1;
+            state.worldEvent.timer -= dt * (state.district?.eventRate ?? 1) * nightRate;
             if (state.worldEvent.timer <= 0) spawnWorldEvent();
         }
 
         for (let index = eventPickups.length - 1; index >= 0; index -= 1) {
             const event = eventPickups[index];
             event.life -= dt;
-            event.mesh.rotation.y += dt * 1.8;
-            event.mesh.position.y = 1.4 + Math.sin(event.life * 3) * 0.18;
+            if (event.kind === "convoy" || event.kind === "race") {
+                advanceEventMover(event, dt);
+            } else {
+                event.mesh.rotation.y += dt * 1.8;
+                event.mesh.position.y = event.baseY + Math.sin(event.life * 3) * 0.18;
+            }
             state.worldEvent.timer = Math.max(0, event.life);
-            if (distanceSq(state.player.x, state.player.z, event.x, event.z) < 13) {
+            state.worldEvent.x = event.x;
+            state.worldEvent.z = event.z;
+            if (distanceSq(state.player.x, state.player.z, event.x, event.z) < (event.collectRadius ?? 13) ** 2) {
                 addScore(event.score, true);
                 const cashGain = addCash(event.cash || 0);
                 if (event.heal) state.player.health = Math.min(getMaxHealth(), state.player.health + event.heal);
+                if (event.nitro) state.player.nitro = Math.min(getNitroMax(), state.player.nitro + event.nitro);
+                if (event.emp) triggerEmp(event.x, event.z);
+                if (event.pickupBurst) spawnDistrictPickup(event.pickupBurst, event.districtId, event.x, event.z);
                 updateWanted(state.wanted.level + event.heat);
                 state.stats.events += 1;
                 state.lifetime.events += 1;
                 refreshProgress();
                 spawnParticle(event.x, event.z, event.color, 34);
                 setStatus(`${event.label} gesichert. Bank +$${cashGain}.`, 2.5);
-                scene.remove(event.mesh);
-                eventPickups.splice(index, 1);
-                state.worldEvent.active = false;
-                state.worldEvent.label = "Ruhige Strassen";
-                state.worldEvent.timer = 22 + Math.random() * 24;
+                removeWorldEvent(index);
                 audio?.mission();
             } else if (event.life <= 0) {
-                scene.remove(event.mesh);
-                eventPickups.splice(index, 1);
-                state.worldEvent.active = false;
-                state.worldEvent.label = "Ruhige Strassen";
-                state.worldEvent.timer = 18 + Math.random() * 28;
+                removeWorldEvent(index);
                 setStatus("Event verpasst. Dispatch ist weitergezogen.", 1.6);
             }
         }
@@ -761,8 +832,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function spawnPickup() {
         const district = chooseSpawnDistrict("pickup");
         const type = pickWeightedKey(district.pickupWeights);
-        const { x, z } = sampleDistrictSpawnPosition(district, district.id === "park");
+        const { x, z } = sampleDistrictSpawnPosition(district, district.id === "park", district.id !== "downtown");
+        createPickupAt(type, x, z, district);
+    }
+
+    function createPickupAt(type, x, z, district = getDistrictAt(x, z)) {
         const info = PICKUP_TYPES[type];
+        if (!info) return null;
         const mesh = new THREE.Mesh(pickupGeo, createMaterial(info.color, {
             roughness: 0.14,
             metalness: 0.78,
@@ -772,7 +848,16 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         mesh.position.set(x, 1.35, z);
         mesh.castShadow = true;
         scene.add(mesh);
-        pickups.push({ mesh, type, x, z, baseY: 1.35, spin: 1.6 + Math.random() * 2.8, t: Math.random() * 10, districtId: district.id });
+        const pickup = { mesh, type, x, z, baseY: 1.35, spin: 1.6 + Math.random() * 2.8, t: Math.random() * 10, districtId: district.id };
+        pickups.push(pickup);
+        return pickup;
+    }
+
+    function spawnDistrictPickup(type, districtId, x, z) {
+        const district = DISTRICTS.find((entry) => entry.id === districtId) ?? getDistrictAt(x, z);
+        const offsetX = (Math.random() - 0.5) * 4.5;
+        const offsetZ = (Math.random() - 0.5) * 4.5;
+        return createPickupAt(type, clamp(x + offsetX, -CONFIG.map.size / 2, CONFIG.map.size / 2), clamp(z + offsetZ, -CONFIG.map.size / 2, CONFIG.map.size / 2), district);
     }
 
     function spawnWorldEvent() {
@@ -780,33 +865,125 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const district = chooseSpawnDistrict("event");
         const eventId = pickWeightedKey(district.eventWeights);
         const event = WORLD_EVENTS.find((entry) => entry.id === eventId) ?? WORLD_EVENTS[0];
-        const { x, z } = sampleDistrictSpawnPosition(district, false);
-        const mesh = new THREE.Mesh(eventGeo, createMaterial(event.color, {
+        const nightBonus = state.time.phase === "night" ? 1.22 : 1;
+        const life = district.id === "harbor" ? 34 : 38;
+        const eventState = createWorldEventState(event, district, life, nightBonus);
+        if (!eventState) return;
+        scene.add(eventState.mesh);
+        eventPickups.push(eventState);
+        state.worldEvent.active = true;
+        state.worldEvent.label = event.label;
+        state.worldEvent.timer = life;
+        state.worldEvent.x = eventState.x;
+        state.worldEvent.z = eventState.z;
+        setStatus(`Event entdeckt: ${event.label}.`, 2);
+    }
+
+    function createWorldEventState(event, district, life, nightBonus) {
+        const common = {
+            ...event,
+            districtId: district.id,
+            score: Math.round(event.score * (district.eventScoreMultiplier ?? 1) * nightBonus),
+            cash: Math.round((event.cash || 0) * (district.eventCashMultiplier ?? 1) * nightBonus),
+            heat: (event.heat || 0) + (district.eventHeatBonus ?? 0),
+            life,
+            maxLife: life,
+            collectRadius: event.kind === "convoy" || event.kind === "race" ? 6.2 : 13,
+        };
+
+        if (event.kind === "convoy" || event.kind === "race") {
+            const axis = Math.random() < 0.5 ? "x" : "z";
+            const direction = Math.random() < 0.5 ? -1 : 1;
+            const streetOptions = getDistrictTrafficStreets(axis, district);
+            const street = streetOptions[Math.floor(Math.random() * streetOptions.length)];
+            const pos = getDistrictTrafficPosition(axis, district);
+            const x = axis === "x" ? pos : street;
+            const z = axis === "z" ? pos : street;
+            const model = event.id === "hotVan"
+                ? { ...CAR_MODELS[3], name: "Hot Van", color: "#ff6a4f", trim: "#2b1515" }
+                : event.id === "vipConvoy"
+                    ? { ...CAR_MODELS[2], name: "VIP", color: "#7fd6ff", trim: "#102534", roof: "sport" }
+                    : { ...CAR_MODELS[2], name: "Street Racer", color: "#79ffb3", trim: "#14261e", roof: "sport" };
+            const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
+            mesh.position.set(x, 0.36, z);
+            mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+            const lights = addAmbientHeadlights(mesh, model, event.color);
+            return {
+                mesh,
+                x,
+                z,
+                axis,
+                direction,
+                speed: (event.speed ?? 5.2) * (state.time.phase === "night" ? 1.08 : 1),
+                baseY: 0.36,
+                headlights: lights,
+                nitro: event.kind === "race" ? 24 : 0,
+                ...common,
+            };
+        }
+
+        const allowOffroad = district.id === "park" || event.kind === "stash";
+        const { x, z } = sampleDistrictSpawnPosition(district, district.id === "park" || event.kind === "stash", allowOffroad);
+        let mesh = null;
+        const eventMaterial = createMaterial(event.color, {
             roughness: 0.18,
             metalness: 0.7,
             emissive: event.color,
             emissiveIntensity: 0.55,
-        }));
+        });
+
+        if (event.kind === "closure") {
+            mesh = new THREE.Group();
+            const core = new THREE.Mesh(new THREE.BoxGeometry(2.8, 1.1, 0.8), eventMaterial);
+            core.position.y = 1.1;
+            core.castShadow = true;
+            mesh.add(core);
+            const ring = new THREE.Mesh(new THREE.TorusGeometry(2.2, 0.16, 12, 28), createMaterial("#f7fbff", {
+                emissive: event.color,
+                emissiveIntensity: 0.4,
+                roughness: 0.18,
+                metalness: 0.62,
+            }));
+            ring.rotation.x = Math.PI / 2;
+            ring.position.y = 1.5;
+            mesh.add(ring);
+            mesh.position.set(x, 0, z);
+            const barriers = createClosureEventBlocks(x, z);
+            return { mesh, x, z, baseY: 1.4, barriers, ...common };
+        }
+
+        mesh = new THREE.Mesh(
+            event.kind === "stash" ? new THREE.BoxGeometry(1.25, 1.05, 1.25) : eventGeo,
+            eventMaterial
+        );
         mesh.position.set(x, 1.4, z);
         mesh.castShadow = true;
-        scene.add(mesh);
-        eventPickups.push({
+        return {
             mesh,
-            ...event,
             x,
             z,
-            districtId: district.id,
-            score: Math.round(event.score * (district.eventScoreMultiplier ?? 1)),
-            cash: Math.round((event.cash || 0) * (district.eventCashMultiplier ?? 1)),
-            heat: (event.heat || 0) + (district.eventHeatBonus ?? 0),
-            life: district.id === "harbor" ? 34 : 38,
-        });
-        state.worldEvent.active = true;
-        state.worldEvent.label = event.label;
-        state.worldEvent.timer = district.id === "harbor" ? 34 : 38;
-        state.worldEvent.x = x;
-        state.worldEvent.z = z;
-        setStatus(`Event entdeckt: ${event.label}.`, 2);
+            baseY: 1.4,
+            emp: event.id === "cashDrop" && state.weather.mode === "storm" && Math.random() < 0.26,
+            pickupBurst: event.id === "hiddenCache" ? "parts" : null,
+            ...common,
+        };
+    }
+
+    function removeWorldEvent(index) {
+        const event = eventPickups[index];
+        if (!event) return;
+        scene.remove(event.mesh);
+        if (event.barriers) {
+            for (const barrier of event.barriers) {
+                scene.remove(barrier.mesh);
+                const hazardIndex = hazards.indexOf(barrier);
+                if (hazardIndex >= 0) hazards.splice(hazardIndex, 1);
+            }
+        }
+        eventPickups.splice(index, 1);
+        state.worldEvent.active = false;
+        state.worldEvent.label = "Ruhige Strassen";
+        state.worldEvent.timer = 18 + Math.random() * 28;
     }
 
     function spawnRainDrop(x, z) {
@@ -845,9 +1022,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const z = axis === "z" ? pos : street;
         mesh.position.set(x, 0.35, z);
         mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+        const headlights = addAmbientHeadlights(mesh, model);
         scene.add(mesh);
         const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
-        traffic.push({ mesh, x, z, axis, direction, speed: baseSpeed + Math.random() * 3.2, model, cooldown: 0, districtId: district.id });
+        traffic.push({ mesh, x, z, axis, direction, speed: baseSpeed + Math.random() * 3.2, model, cooldown: 0, districtId: district.id, headlights });
     }
 
     function chooseTrafficDistrict() {
@@ -866,15 +1044,17 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             return Math.random() < 0.5 ? CAR_MODELS[0] : CAR_MODELS[2];
         }
         if (district.id === "industrial") {
-            return Math.random() < 0.55 ? CAR_MODELS[3] : CAR_MODELS[1];
+            return Math.random() < 0.65
+                ? { ...CAR_MODELS[3], name: "Service Van", color: "#d39157", trim: "#2a2219" }
+                : { ...CAR_MODELS[1], name: "Yard Hauler", color: "#c4b09a", trim: "#29251e" };
         }
         if (district.id === "harbor") {
             return Math.random() < 0.5
-                ? { ...CAR_MODELS[3], color: "#6f8ea5", trim: "#1a2128", name: "Dock Van" }
-                : { ...CAR_MODELS[0], color: "#4d6e84", trim: "#162129", name: "Dock Runner" };
+                ? { ...CAR_MODELS[3], color: "#6f8ea5", trim: "#1a2128", name: "Dock Truck", width: 2.34, length: 5.1 }
+                : { ...CAR_MODELS[0], color: "#4d6e84", trim: "#162129", name: "Harbor Shuttle" };
         }
         return Math.random() < 0.7
-            ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Shuttle" }
+            ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Service" }
             : { ...CAR_MODELS[2], color: "#b8e2ff", trim: "#11354a", name: "Cycle Lane" };
     }
 
@@ -884,7 +1064,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return DISTRICTS[Math.floor(Math.random() * DISTRICTS.length)];
     }
 
-    function sampleDistrictSpawnPosition(district, preferShortcut = false) {
+    function sampleDistrictSpawnPosition(district, preferShortcut = false, allowOffroad = false) {
         if (preferShortcut && district.id === "park" && world.shortcutZones?.length) {
             const localZones = world.shortcutZones.filter((zone) => getDistrictAt(zone.x, zone.z).id === district.id);
             if (localZones.length > 0 && Math.random() < 0.72) {
@@ -901,8 +1081,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (let tries = 0; tries < 30; tries += 1) {
             const rawX = randomCoordinateForSign(district.x);
             const rawZ = randomCoordinateForSign(district.z);
-            x = snapStreet(rawX);
-            z = snapStreet(rawZ);
+            x = allowOffroad && Math.random() < 0.55 ? rawX : snapStreet(rawX);
+            z = allowOffroad && Math.random() < 0.55 ? rawZ : snapStreet(rawZ);
             if (!insideBuilding(world, x, z, 1.5)) break;
         }
         return { x, z };
@@ -1484,6 +1664,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             speedDamping: obstacle.speedDamping ?? 0.34,
             shake: obstacle.shake ?? 0.22,
         };
+        triggerObstacleChainReaction(obstacle, impact, reaction);
         spawnParticle(obstacle.x, obstacle.z, reaction.color, reaction.particleCount);
         setStatus(getDestructionMessage(obstacle, reward), 1.4);
         return reaction;
@@ -1503,12 +1684,24 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function applyWeatherVisuals() {
         const weather = WEATHER_MODES[state.weather.mode] ?? WEATHER_MODES.clear;
         const color = new THREE.Color(weather.color);
+        if (state.time.phase === "night") color.lerp(new THREE.Color("#071018"), 0.38);
         scene.background = color;
         if (scene.fog) {
             scene.fog.color.copy(color);
-            scene.fog.near = state.weather.mode === "fog" ? 24 : 48;
-            scene.fog.far = state.weather.mode === "fog" ? 92 : 130;
+            const fogNear = state.weather.mode === "fog" ? 20 : state.weather.mode === "storm" ? 28 : 48;
+            const fogFar = state.weather.mode === "fog" ? 72 : state.weather.mode === "storm" ? 102 : 130;
+            scene.fog.near = state.time.phase === "night" ? fogNear * 0.92 : fogNear;
+            scene.fog.far = state.time.phase === "night" ? fogFar * 0.9 : fogFar;
         }
+        if (lights) {
+            lights.ambient.intensity = state.time.phase === "night" ? 0.7 : state.weather.mode === "storm" ? 0.92 : 1.25;
+            lights.sun.intensity = state.time.phase === "night"
+                ? (state.weather.mode === "storm" ? 0.85 : 0.55)
+                : state.weather.mode === "storm" ? 2.6 : 4.8;
+            lights.nightGlow.intensity = state.time.phase === "night" ? 1.7 : state.weather.mode === "fog" ? 1.05 : 0.9;
+            lights.nightGlow.color.set(state.time.phase === "night" ? "#69d0ff" : "#63c8ff");
+        }
+        renderer.toneMappingExposure = state.time.phase === "night" ? 0.92 : state.weather.mode === "storm" ? 0.98 : 1.08;
     }
 
     function updateDebug(dt) {
@@ -1550,6 +1743,232 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function clamp(value, min, max) {
         return Math.max(min, Math.min(max, value));
+    }
+
+    function getPoliceVisibilityFactor() {
+        let factor = 1;
+        if (state.time.phase === "night") factor += 0.18;
+        if (state.weather.mode === "fog") factor -= 0.28;
+        if (state.weather.mode === "storm") factor -= 0.12;
+        return clamp(factor, 0.7, 1.3);
+    }
+
+    function addAmbientHeadlights(mesh, model, color = "#fff6a8") {
+        const left = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 8, 8),
+            createMaterial(color, { roughness: 0.18, metalness: 0.52, emissive: color, emissiveIntensity: 0.2 })
+        );
+        left.position.set(-model.width * 0.28, 0.16, model.length * 0.56);
+        const right = new THREE.Mesh(
+            new THREE.SphereGeometry(0.1, 8, 8),
+            createMaterial(color, { roughness: 0.18, metalness: 0.52, emissive: color, emissiveIntensity: 0.2 })
+        );
+        right.position.set(model.width * 0.28, 0.16, model.length * 0.56);
+        mesh.add(left);
+        mesh.add(right);
+        return [left, right];
+    }
+
+    function createClosureEventBlocks(x, z) {
+        const axis = Math.random() < 0.5 ? "x" : "z";
+        const barriers = [];
+        for (const offset of [-4.2, 0, 4.2]) {
+            const bx = axis === "x" ? x + offset : x;
+            const bz = axis === "z" ? z + offset : z;
+            const mesh = new THREE.Mesh(
+                axis === "x" ? new THREE.BoxGeometry(2.4, 1.1, 0.6) : new THREE.BoxGeometry(0.6, 1.1, 2.4),
+                createMaterial("#ff9c45", {
+                    roughness: 0.42,
+                    metalness: 0.16,
+                    emissive: "#7e3614",
+                    emissiveIntensity: 0.16,
+                    transparent: true,
+                    opacity: 0.88,
+                })
+            );
+            mesh.position.set(bx, 0.56, bz);
+            mesh.castShadow = true;
+            scene.add(mesh);
+            const hazard = {
+                mesh,
+                x: bx,
+                z: bz,
+                radius: axis === "x" ? 1.5 : 1.3,
+                life: 36,
+                maxLife: 36,
+                type: "closureBarrier",
+                eventOwned: true,
+            };
+            hazards.push(hazard);
+            barriers.push(hazard);
+        }
+        return barriers;
+    }
+
+    function advanceEventMover(event, dt) {
+        const move = event.speed * event.direction * dt;
+        if (event.axis === "x") event.x += move;
+        else event.z += move;
+
+        const district = DISTRICTS.find((entry) => entry.id === event.districtId) ?? DISTRICTS[0];
+        const minX = district.x < 0 ? -CONFIG.map.size / 2 + 2 : 2;
+        const maxX = district.x < 0 ? -2 : CONFIG.map.size / 2 - 2;
+        const minZ = district.z < 0 ? -CONFIG.map.size / 2 + 2 : 2;
+        const maxZ = district.z < 0 ? -2 : CONFIG.map.size / 2 - 2;
+
+        if (event.x <= minX || event.x >= maxX) {
+            event.direction *= -1;
+            event.x = clamp(event.x, minX, maxX);
+        }
+        if (event.z <= minZ || event.z >= maxZ) {
+            event.direction *= -1;
+            event.z = clamp(event.z, minZ, maxZ);
+        }
+        event.mesh.position.set(event.x, event.baseY, event.z);
+        event.mesh.rotation.y = event.axis === "x"
+            ? event.direction > 0 ? Math.PI / 2 : -Math.PI / 2
+            : event.direction > 0 ? 0 : Math.PI;
+        if (event.headlights) {
+            const headlightIntensity = state.time.phase === "night" ? 1 : state.weather.mode === "fog" ? 0.72 : 0.25;
+            for (const light of event.headlights) light.material.emissiveIntensity = headlightIntensity;
+        }
+    }
+
+    function triggerObstacleChainReaction(obstacle, impact, reaction) {
+        if (obstacle.type === "lamp") {
+            spawnFallenLampHazard(obstacle, reaction.color);
+            return;
+        }
+        if (obstacle.type === "crate" || obstacle.type === "harborCrate") {
+            spawnCrateDebrisField(obstacle, obstacle.type === "harborCrate" ? "#8bc7df" : "#d9a06a");
+            return;
+        }
+        if (obstacle.type === "fence") {
+            spawnFenceGapDebris(obstacle);
+            return;
+        }
+        if (obstacle.type === "dumpster" && impact > 11) {
+            spawnHeavyDebris(obstacle, "#7b8790", 2);
+        }
+    }
+
+    function spawnFallenLampHazard(obstacle, color) {
+        const horizontal = Math.random() < 0.5;
+        const mesh = new THREE.Mesh(
+            horizontal ? new THREE.BoxGeometry(5.8, 0.22, 0.34) : new THREE.BoxGeometry(0.34, 0.22, 5.8),
+            createMaterial("#2d333b", {
+                roughness: 0.52,
+                metalness: 0.22,
+                emissive: color,
+                emissiveIntensity: 0.12,
+                transparent: true,
+                opacity: 0.82,
+            })
+        );
+        mesh.position.set(obstacle.x, 0.18, obstacle.z);
+        scene.add(mesh);
+        hazards.push({
+            mesh,
+            x: obstacle.x,
+            z: obstacle.z,
+            radius: horizontal ? 2.8 : 2.1,
+            life: 8.5,
+            maxLife: 8.5,
+            type: "fallenLamp",
+            color,
+            slowdown: 0.42,
+        });
+    }
+
+    function spawnCrateDebrisField(obstacle, color) {
+        const pieces = 3 + Math.floor(Math.random() * 3);
+        for (let index = 0; index < pieces; index += 1) {
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.6 + Math.random() * 0.35, 0.26, 0.6 + Math.random() * 0.35),
+                createMaterial(color, {
+                    roughness: 0.82,
+                    metalness: 0.04,
+                    transparent: true,
+                    opacity: 0.82,
+                })
+            );
+            const x = obstacle.x + (Math.random() - 0.5) * 3.2;
+            const z = obstacle.z + (Math.random() - 0.5) * 3.2;
+            mesh.position.set(x, 0.16, z);
+            scene.add(mesh);
+            hazards.push({
+                mesh,
+                x,
+                z,
+                radius: 0.58,
+                life: 7.2,
+                maxLife: 7.2,
+                type: "debris",
+                color,
+                damage: 2.6,
+                slowdown: 0.7,
+                message: "Kistensplitter liegen auf der Fahrbahn.",
+            });
+        }
+    }
+
+    function spawnFenceGapDebris(obstacle) {
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(1.8, 0.16, 0.36),
+            createMaterial("#c2d2da", {
+                roughness: 0.58,
+                metalness: 0.18,
+                transparent: true,
+                opacity: 0.72,
+            })
+        );
+        mesh.position.set(obstacle.x, 0.1, obstacle.z);
+        mesh.rotation.y = Math.random() * Math.PI;
+        scene.add(mesh);
+        hazards.push({
+            mesh,
+            x: obstacle.x,
+            z: obstacle.z,
+            radius: 0.9,
+            life: 3.8,
+            maxLife: 3.8,
+            type: "debris",
+            color: "#c2d2da",
+            damage: 1.5,
+            slowdown: 0.82,
+            message: "Zaunreste schlittern ueber den Asphalt.",
+        });
+    }
+
+    function spawnHeavyDebris(obstacle, color, count = 2) {
+        for (let index = 0; index < count; index += 1) {
+            const mesh = new THREE.Mesh(
+                new THREE.BoxGeometry(0.9, 0.32, 0.9),
+                createMaterial(color, {
+                    roughness: 0.74,
+                    metalness: 0.08,
+                    transparent: true,
+                    opacity: 0.8,
+                })
+            );
+            const x = obstacle.x + (Math.random() - 0.5) * 2.1;
+            const z = obstacle.z + (Math.random() - 0.5) * 2.1;
+            mesh.position.set(x, 0.18, z);
+            scene.add(mesh);
+            hazards.push({
+                mesh,
+                x,
+                z,
+                radius: 0.74,
+                life: 6.5,
+                maxLife: 6.5,
+                type: "debris",
+                color,
+                damage: 3.2,
+                slowdown: 0.64,
+                message: "Schwerer Schrott liegt im Weg.",
+            });
+        }
     }
 
     return {

@@ -69,7 +69,8 @@ const sharedMaterials = {
 };
 
 const world = createWorld(scene, sharedMaterials);
-const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio });
+const lights = { ambient, sun, nightGlow };
+const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights });
 const input = createInput({
     onRestart: () => runtime.reset(),
     onSwitchCar: (index) => runtime.switchCar(index),
