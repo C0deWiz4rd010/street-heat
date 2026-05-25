@@ -280,24 +280,28 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         const hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
         const hitObstacle = obstacleAt(world, next.x, next.z, CONFIG.player.radius);
+        let destroyedReaction = null;
         if (hitObstacle) {
             const dx = next.x - hitObstacle.x;
             const dz = next.z - hitObstacle.z;
             const distance = Math.sqrt(dx * dx + dz * dz) || 1;
             next.x += (dx / distance) * 1.2;
             next.z += (dz / distance) * 1.2;
-            if (hitObstacle.destructible && Math.abs(player.speed) > 6) {
-                destroyObstacle(hitObstacle, Math.abs(player.speed));
+            const impactSpeed = Math.abs(player.speed);
+            if (hitObstacle.destructible && impactSpeed > (hitObstacle.minImpact ?? 6)) {
+                destroyedReaction = destroyObstacle(hitObstacle, impactSpeed);
             }
         }
 
         if (hitBuilding || hitObstacle) {
             const impact = Math.abs(player.speed);
-            player.speed *= 0.34;
+            const obstacleDamping = destroyedReaction?.speedDamping ?? hitObstacle?.speedDamping ?? 0.34;
+            player.speed *= hitBuilding ? 0.34 : obstacleDamping;
             if (impact > 5) {
-                damagePlayer(impact * (hitBuilding ? 0.8 : 0.55));
-                state.cameraShake = Math.min(1, impact * 0.04);
-                spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : "#ffc64d", 18);
+                const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
+                damagePlayer(impact * (hitBuilding ? 0.8 : obstacleDamageScale));
+                state.cameraShake = Math.min(1, Math.max(impact * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
+                spawnParticle(next.x, next.z, hitBuilding ? "#ff6a4f" : (destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d"), destroyedReaction?.particleCount ?? 18);
             }
         }
 
@@ -1473,8 +1477,27 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.stats.propsDestroyed += 1;
         state.lifetime.props += 1;
         refreshProgress();
-        spawnParticle(obstacle.x, obstacle.z, obstacle.color ?? "#ffc64d", 14);
-        setStatus(`${obstacle.label ?? "Prop"} zerlegt. +${reward} Score.`, 1.4);
+        const reaction = {
+            color: obstacle.color ?? "#ffc64d",
+            particleCount: obstacle.particleCount ?? 14,
+            hitDamageScale: obstacle.hitDamageScale ?? 0.55,
+            speedDamping: obstacle.speedDamping ?? 0.34,
+            shake: obstacle.shake ?? 0.22,
+        };
+        spawnParticle(obstacle.x, obstacle.z, reaction.color, reaction.particleCount);
+        setStatus(getDestructionMessage(obstacle, reward), 1.4);
+        return reaction;
+    }
+
+    function getDestructionMessage(obstacle, reward) {
+        if (obstacle.type === "sign") return `Schild umgerissen. +${reward} Score.`;
+        if (obstacle.type === "crate") return `Kisten zerplatzt. +${reward} Score.`;
+        if (obstacle.type === "harborCrate") return `Hafenkisten aufgebrochen. +${reward} Score.`;
+        if (obstacle.type === "fence") return `Zaun durchbrochen. +${reward} Score.`;
+        if (obstacle.type === "lamp") return `Laterne umgefahren. +${reward} Score.`;
+        if (obstacle.type === "dumpster") return `Muellcontainer weggeschoben. +${reward} Score.`;
+        if (obstacle.type === "constructionBeacon") return `Baustellenbake zerlegt. +${reward} Score.`;
+        return `${obstacle.label ?? "Prop"} zerlegt. +${reward} Score.`;
     }
 
     function applyWeatherVisuals() {

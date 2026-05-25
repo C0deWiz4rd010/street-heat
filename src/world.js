@@ -225,17 +225,7 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
             const prop = createStreetProp(x, z, index, materials.kioskAccent);
             scene.add(prop);
             objects.push(prop);
-            obstacles.push({
-                x,
-                z,
-                radius: prop.userData.radius,
-                type: prop.userData.type,
-                label: prop.userData.label,
-                reward: prop.userData.reward,
-                color: prop.userData.color,
-                destructible: true,
-                mesh: prop,
-            });
+            appendObstacleFromMesh(obstacles, prop, x, z);
         }
     }
 }
@@ -290,6 +280,23 @@ function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials
         objects.push(stack.mesh);
         obstacles.push({ x, z, radius: stack.radius, type: "containerStack", label: "Container", reward: 0, color: "#7fa0b2", mesh: stack.mesh });
     }
+
+    for (let index = 0; index < 4; index += 1) {
+        const x = bx + (Math.random() - 0.5) * (CONFIG.map.blockSize - 3);
+        const z = bz + (Math.random() - 0.5) * (CONFIG.map.blockSize - 3);
+        if (insideBuilding({ buildings }, x, z, 1.2)) continue;
+        const prop = Math.random() < 0.55
+            ? createCrateStackProp(x, z, 2 + Math.floor(Math.random() * 2))
+            : createConstructionBeacon(x, z, index);
+        scene.add(prop);
+        objects.push(prop);
+        appendObstacleFromMesh(obstacles, prop, x, z);
+    }
+
+    const fence = createFenceSegment(bx, bz - 6.1, "x", 4 + Math.floor(Math.random() * 2));
+    scene.add(fence);
+    objects.push(fence);
+    appendObstacleFromMesh(obstacles, fence, bx, bz - 6.1);
 }
 
 function decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, materials, bx, bz) {
@@ -344,6 +351,13 @@ function decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, 
             scene.add(tree);
             obstacles.push({ x, z, radius: 1.8, type: "tree" });
         }
+    }
+
+    if (Math.random() < 0.55) {
+        const fence = createFenceSegment(bx + (Math.random() - 0.5) * 4, bz + (Math.random() - 0.5) * 4, Math.random() < 0.5 ? "x" : "z", 3);
+        scene.add(fence);
+        objects.push(fence);
+        appendObstacleFromMesh(obstacles, fence, fence.position.x, fence.position.z);
     }
 }
 
@@ -411,6 +425,16 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
         const ramp = createDockRamp(bx - 0.4, bz - 3.6, materials.ramp);
         scene.add(ramp);
         objects.push(ramp);
+    }
+
+    for (let index = 0; index < 3; index += 1) {
+        const x = bx + (Math.random() - 0.5) * 9 - 1.5;
+        const z = bz + (Math.random() - 0.5) * 7 + 0.5;
+        if (insideBuilding({ buildings }, x, z, 1.1)) continue;
+        const crate = createHarborCrateProp(x, z, index);
+        scene.add(crate);
+        objects.push(crate);
+        appendObstacleFromMesh(obstacles, crate, x, z);
     }
 }
 
@@ -512,7 +536,18 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
         }));
         top.position.y = 0.82;
         group.add(top);
-        group.userData = { radius: 1.15, type: "kiosk", label: "Kiosk", reward: 90, color: "#63c8ff" };
+        group.userData = {
+            radius: 1.15,
+            type: "kiosk",
+            label: "Kiosk",
+            reward: 90,
+            color: "#63c8ff",
+            destructible: true,
+            minImpact: 8.5,
+            hitDamageScale: 0.42,
+            speedDamping: 0.42,
+            particleCount: 16,
+        };
     } else if (roll < 0.68) {
         const post = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 2.9, 8), createMaterial("#151a21", { roughness: 0.5, metalness: 0.4 }));
         post.position.y = 1.45;
@@ -527,7 +562,18 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
         sign.position.y = 2.6;
         sign.rotation.y = Math.random() * Math.PI;
         group.add(sign);
-        group.userData = { radius: 0.95, type: "sign", label: "Werbeschild", reward: 70, color: variant % 2 ? "#ffc64d" : "#ff6a4f" };
+        group.userData = {
+            radius: 0.95,
+            type: "sign",
+            label: "Werbeschild",
+            reward: 70,
+            color: variant % 2 ? "#ffc64d" : "#ff6a4f",
+            destructible: true,
+            minImpact: 5.4,
+            hitDamageScale: 0.18,
+            speedDamping: 0.7,
+            particleCount: 12,
+        };
     } else {
         const skip = new THREE.Mesh(new THREE.BoxGeometry(2.2, 0.88, 1.35), createMaterial("#7b8790", { roughness: 0.72, metalness: 0.08 }));
         skip.position.y = 0.45;
@@ -536,7 +582,19 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
         const lid = new THREE.Mesh(new THREE.BoxGeometry(2.32, 0.12, 1.45), createMaterial("#10151c", { roughness: 0.5, metalness: 0.28 }));
         lid.position.y = 0.94;
         group.add(lid);
-        group.userData = { radius: 1.55, type: "dumpster", label: "Container", reward: 80, color: "#7b8790" };
+        group.userData = {
+            radius: 1.55,
+            type: "dumpster",
+            label: "Muellcontainer",
+            reward: 80,
+            color: "#7b8790",
+            destructible: true,
+            minImpact: 10.2,
+            hitDamageScale: 0.74,
+            speedDamping: 0.24,
+            particleCount: 20,
+            shake: 0.65,
+        };
     }
 
     group.position.set(x, 0, z);
@@ -572,6 +630,114 @@ function createContainerStack(x, z, materials, levels = 2) {
 
     group.position.set(x, 0, z);
     return { mesh: group, radius: Math.max(1.4, Math.max(maxX, maxZ)) };
+}
+
+function createCrateStackProp(x, z, levels = 2) {
+    const group = new THREE.Group();
+    const woodMat = createMaterial("#9a6d42", { roughness: 0.84, metalness: 0.04 });
+    for (let level = 0; level < levels; level += 1) {
+        const mesh = new THREE.Mesh(new THREE.BoxGeometry(1.15, 0.72, 1.15), woodMat);
+        mesh.position.set((level % 2) * 0.18, 0.36 + level * 0.74, (level % 2 ? -0.14 : 0.14));
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        group.add(mesh);
+    }
+    group.position.set(x, 0, z);
+    group.rotation.y = Math.random() * Math.PI;
+    group.userData = {
+        radius: 1.05,
+        type: "crate",
+        label: "Kistenstapel",
+        reward: 65,
+        color: "#d9a06a",
+        destructible: true,
+        minImpact: 4.8,
+        hitDamageScale: 0.1,
+        speedDamping: 0.76,
+        particleCount: 18,
+    };
+    return group;
+}
+
+function createHarborCrateProp(x, z, variant) {
+    const group = createCrateStackProp(x, z, 2 + (variant % 2));
+    group.userData = {
+        ...group.userData,
+        type: "harborCrate",
+        label: "Hafenkiste",
+        reward: 78,
+        color: "#8bc7df",
+        minImpact: 5.6,
+        hitDamageScale: 0.14,
+        speedDamping: 0.68,
+        particleCount: 20,
+        shake: 0.3,
+    };
+    return group;
+}
+
+function createFenceSegment(x, z, axis = "x", sections = 4) {
+    const group = new THREE.Group();
+    const postMat = createMaterial("#3e454d", { roughness: 0.66, metalness: 0.16 });
+    const railMat = createMaterial("#9eb2bd", { roughness: 0.38, metalness: 0.24 });
+    const spacing = 1.15;
+    const total = (sections - 1) * spacing;
+    for (let index = 0; index < sections; index += 1) {
+        const offset = index * spacing - total / 2;
+        const post = new THREE.Mesh(new THREE.BoxGeometry(0.14, 1.2, 0.14), postMat);
+        if (axis === "x") post.position.set(offset, 0.6, 0);
+        else post.position.set(0, 0.6, offset);
+        post.castShadow = true;
+        group.add(post);
+    }
+    for (const height of [0.48, 0.84]) {
+        const rail = new THREE.Mesh(
+            axis === "x" ? new THREE.BoxGeometry(total + 0.35, 0.09, 0.12) : new THREE.BoxGeometry(0.12, 0.09, total + 0.35),
+            railMat
+        );
+        rail.position.y = height;
+        rail.castShadow = true;
+        group.add(rail);
+    }
+    group.position.set(x, 0, z);
+    group.userData = {
+        radius: Math.max(0.8, total / 2 + 0.3),
+        type: "fence",
+        label: "Zaun",
+        reward: 58,
+        color: "#c2d2da",
+        destructible: true,
+        minImpact: 6.2,
+        hitDamageScale: 0.2,
+        speedDamping: 0.62,
+        particleCount: 16,
+    };
+    return group;
+}
+
+function createConstructionBeacon(x, z, variant) {
+    const group = new THREE.Group();
+    const cone = new THREE.Mesh(new THREE.ConeGeometry(0.34, 0.82, 12), createMaterial("#ff9c45", { roughness: 0.48, metalness: 0.08 }));
+    cone.position.y = 0.41;
+    cone.castShadow = true;
+    group.add(cone);
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(0.24, 0.3, 0.12, 12), createMaterial(variant % 2 ? "#f7fbff" : "#10151c", { roughness: 0.3, metalness: 0.16 }));
+    band.position.y = 0.45;
+    group.add(band);
+    group.position.set(x, 0, z);
+    group.userData = {
+        radius: 0.48,
+        type: "constructionBeacon",
+        label: "Baustellenbake",
+        reward: 32,
+        color: "#ffb25c",
+        destructible: true,
+        minImpact: 2.8,
+        hitDamageScale: 0.04,
+        speedDamping: 0.9,
+        particleCount: 10,
+    };
+    return group;
 }
 
 function createPavilion(x, z) {
@@ -655,6 +821,11 @@ function createLamp(scene, obstacles, x, z, tint = "#ffc64d") {
         reward: 45,
         color: tint,
         destructible: true,
+        minImpact: 6.8,
+        hitDamageScale: 0.34,
+        speedDamping: 0.58,
+        particleCount: 18,
+        shake: 0.48,
         mesh: group,
     });
 }
@@ -708,4 +879,13 @@ function shuffle(items) {
 
 function clamp(value, min, max) {
     return Math.max(min, Math.min(max, value));
+}
+
+function appendObstacleFromMesh(obstacles, mesh, x, z) {
+    obstacles.push({
+        x,
+        z,
+        mesh,
+        ...mesh.userData,
+    });
 }
