@@ -29,6 +29,8 @@ export function createInitialState() {
             drift: 0,
             driftSessionScore: 0,
             inShortcut: false,
+            lastChanceUsed: false,
+            regenCooldown: 0,
         },
         wanted: {
             level: 0,

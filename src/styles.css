@@ -766,6 +766,33 @@ canvas.game-canvas {
     font-size: 12px;
 }
 
+.mute-btn {
+    backdrop-filter: blur(16px);
+    background: rgba(7, 10, 15, 0.72);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: 8px;
+    color: #ffffff;
+    cursor: pointer;
+    font-size: 18px;
+    height: 40px;
+    line-height: 1;
+    pointer-events: auto;
+    position: fixed;
+    right: 20px;
+    top: 20px;
+    transition: background 0.15s ease, opacity 0.15s ease;
+    width: 40px;
+    z-index: 25;
+}
+
+.mute-btn:hover {
+    background: rgba(255, 255, 255, 0.14);
+}
+
+.mute-btn.muted {
+    opacity: 0.45;
+}
+
 #tacho {
     display: block;
     height: 62px;

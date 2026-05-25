@@ -8,6 +8,7 @@ export function createAudioDirector() {
     let driftOsc = null;
     let driftGain = null;
     let unlocked = false;
+    let muted = false;
 
     function unlock() {
         if (unlocked) return;
@@ -42,6 +43,12 @@ export function createAudioDirector() {
         sirenOsc.start();
 
         unlocked = true;
+    }
+
+    function toggleMute() {
+        muted = !muted;
+        if (master) master.gain.setTargetAtTime(muted ? 0 : 0.12, context.currentTime, 0.08);
+        return muted;
     }
 
     function update(state, dt) {
@@ -106,6 +113,8 @@ export function createAudioDirector() {
     return {
         unlock,
         update,
+        toggleMute,
+        get isMuted() { return muted; },
         nearMiss,
         collect: () => blip(920, 0.1, "triangle", 0.16),
         crash: () => blip(95, 0.16, "sawtooth", 0.24),

@@ -78,6 +78,12 @@ const input = createInput({
 });
 
 ui.restartBtn.addEventListener("click", () => runtime.reset());
+ui.muteBtn.addEventListener("click", () => {
+    audio.unlock();
+    const nowMuted = audio.toggleMute();
+    ui.muteBtn.textContent = nowMuted ? "🔇" : "🔊";
+    ui.muteBtn.classList.toggle("muted", nowMuted);
+});
 ui.startBtn.addEventListener("click", () => {
     audio.unlock();
     runtime.startRun();

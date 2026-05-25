@@ -77,6 +77,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.player.drift = 0;
         state.player.driftSessionScore = 0;
         state.player.inShortcut = false;
+        state.player.lastChanceUsed = false;
+        state.player.regenCooldown = 0;
         state.popup = { text: "", timer: 0, type: "normal" };
         state.nearMiss = { count: 0, timer: 0, streak: 0, streakTimer: 0 };
         state.nearestPoliceDistance = Infinity;
@@ -182,6 +184,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
 
         updatePlayer(dt, input);
+        updatePassiveRegen(dt);
         updateMission(dt);
         updateDistrict();
         updateScannerZones(dt);
@@ -316,11 +319,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             player.nitro = Math.min(nitroMax, player.nitro + dt * (CONFIG.player.nitroRegen + nitroLevel * 0.9 + districtNitro + shortcutNitro));
         }
 
-        // Longitudinal (forward) dynamics
+        // Torque-curve acceleration — strong low-end, tapers at top speed
+        const speedRatioFwd = Math.min(1, Math.abs(fwdSpeed) / boostedMax);
+        const torqueFactor = Math.max(0.18, 1 - speedRatioFwd * 0.62);
+
         if (forward) {
-            fwdSpeed += acceleration * dt;
+            fwdSpeed += acceleration * torqueFactor * dt;
         } else if (reverse) {
-            fwdSpeed -= (fwdSpeed > 0 ? 24 + gripLevel * 2.5 : acceleration * 0.65) * dt;
+            fwdSpeed -= (fwdSpeed > 0 ? 24 + gripLevel * 2.5 : acceleration * 0.55 * torqueFactor) * dt;
         } else {
             fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), (handbrake ? 15 + gripLevel * 2 : brakePower) * dt);
         }
@@ -334,10 +340,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             ? Math.min(1, player.drift + dt * 4.5)
             : Math.max(0, player.drift - dt * 2.8);
 
-        // Turning — more responsive in drift, reduced at high speed
+        // Turning — tight at low speed, understeers at high speed, drift boost
         if (Math.abs(fwdSpeed) > 0.12) {
             const speedRatio = Math.abs(fwdSpeed) / boostedMax;
-            const turnScale = 1 - Math.min(0.55, speedRatio * 0.5);
+            // Low-speed boost: extra agility under 30% maxSpeed for parking/cornering
+            const lowSpeedBoost = speedRatio < 0.3 ? 1 + (0.3 - speedRatio) * 1.4 : 1;
+            const turnScale = (1 - Math.min(0.58, speedRatio * 0.52)) * lowSpeedBoost;
             const driftBoost = isDrifting ? 1.55 + gripLevel * 0.04 : 1;
             player.rotation += turnInput * turnPower * driftBoost * turnScale * dt * Math.sign(fwdSpeed);
         }
@@ -481,8 +489,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateMissionBonusProgress();
         updateMissionBoss(dt);
         if (state.mission.timer <= 0) {
-            damagePlayer(16);
-            setStatus("Mission verpasst. Neue Chance, aber Karosserie leidet.", 2.6);
+            damagePlayer(8);
+            setStatus("Mission verpasst. Neue Chance — halte dich zusammen.", 2.6);
             if (state.running) setMission(state.mission.stage);
             return;
         }
@@ -668,6 +676,20 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             // Recover speed toward natural cruise speed
             if (car.speed < car.naturalSpeed) {
                 car.speed = Math.min(car.naturalSpeed, car.speed + dt * 2.2);
+            }
+
+            // Look-ahead braking: slow down when another car is directly ahead on same axis
+            const lookDist = 5.5 + car.speed * 0.45;
+            const lookX = car.axis === "x" ? car.x + car.direction * lookDist : car.x;
+            const lookZ = car.axis === "z" ? car.z + car.direction * lookDist : car.z;
+            for (const other of traffic) {
+                if (other === car) continue;
+                const ldx = other.x - lookX;
+                const ldz = other.z - lookZ;
+                if (ldx * ldx + ldz * ldz < 9) {
+                    car.speed = Math.max(0.4, car.speed - dt * 7.5);
+                    break;
+                }
             }
 
             // Decay transient push velocity
@@ -1008,8 +1030,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
             if (distanceSq(state.player.x, state.player.z, block.x, block.z) < (block.radius + CONFIG.player.radius) ** 2 && block.cooldown <= 0) {
                 block.cooldown = 1.4;
-                damagePlayer(10 + Math.abs(state.player.speed) * 0.65, "hazard");
-                state.player.speed *= 0.22;
+                damagePlayer(6 + Math.abs(state.player.speed) * 0.38, "hazard");
+                state.player.speed *= 0.32;
                 state.cameraShake = Math.max(state.cameraShake, 0.55);
                 state.stats.roadblocks += 1;
                 audio?.crash();
@@ -1041,8 +1063,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             hazard.mesh.material.opacity = Math.max(0.18, hazard.life / hazard.maxLife);
             if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
                 if (hazard.type === "debris") {
-                    damagePlayer((hazard.damage ?? 3.5) + Math.abs(state.player.speed) * 0.18, "hazard");
-                    state.player.speed *= hazard.slowdown ?? 0.58;
+                    damagePlayer((hazard.damage ?? 2.2) + Math.abs(state.player.speed) * 0.1, "hazard");
+                    state.player.speed *= hazard.slowdown ?? 0.62;
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
                     setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
                     if (hazard.consumeOnHit !== false) {
@@ -1050,21 +1072,21 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         hazards.splice(index, 1);
                     }
                 } else if (hazard.type === "fallenLamp") {
-                    damagePlayer(5 + Math.abs(state.player.speed) * 0.28, "hazard");
-                    state.player.speed *= hazard.slowdown ?? 0.44;
-                    state.cameraShake = Math.max(state.cameraShake, 0.28);
+                    damagePlayer(3.5 + Math.abs(state.player.speed) * 0.16, "hazard");
+                    state.player.speed *= hazard.slowdown ?? 0.52;
+                    state.cameraShake = Math.max(state.cameraShake, 0.22);
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#ffe08a", 12);
                     setStatus("Gefallene Laterne blockiert die Spur.", 1.4);
                 } else if (hazard.type === "closureBarrier") {
-                    damagePlayer(6 + Math.abs(state.player.speed) * 0.34, "hazard");
-                    state.player.speed *= 0.22;
-                    state.cameraShake = Math.max(state.cameraShake, 0.32);
+                    damagePlayer(4 + Math.abs(state.player.speed) * 0.2, "hazard");
+                    state.player.speed *= 0.32;
+                    state.cameraShake = Math.max(state.cameraShake, 0.28);
                     spawnParticle(hazard.x, hazard.z, "#ff9c45", 14);
                     setStatus("Sperrung blockiert die Route.", 1.4);
                 } else {
-                    damagePlayer(7 + Math.abs(state.player.speed) * 0.45, "hazard");
-                    state.player.speed *= 0.28;
-                    state.player.nitro = Math.max(0, state.player.nitro - 32);
+                    damagePlayer(5 + Math.abs(state.player.speed) * 0.28, "hazard");
+                    state.player.speed *= 0.35;
+                    state.player.nitro = Math.max(0, state.player.nitro - 22);
                     spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
                     setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
                     scene.remove(hazard.mesh);
@@ -1946,13 +1968,39 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
+    function updatePassiveRegen(dt) {
+        const player = state.player;
+        player.regenCooldown = Math.max(0, (player.regenCooldown ?? 0) - dt);
+        if (player.regenCooldown > 0) return;
+        const maxHp = getMaxHealth();
+        if (player.health >= maxHp) return;
+        // Slow regen, faster when heat is clear and not at critical HP
+        const regenRate = state.wanted.level === 0 ? 1.1 : 0.3;
+        player.health = Math.min(maxHp, player.health + regenRate * dt);
+    }
+
     function damagePlayer(amount, source = "generic") {
         if (!state.running) return;
         if (source === "crash" || source === "hazard") state.mission.collisionCount += 1;
         const mitigated = amount * (1 - state.upgrades.armor * 0.075);
         state.player.health -= mitigated;
+        state.player.regenCooldown = 6.5;
         state.cameraShake = Math.max(state.cameraShake, mitigated * 0.02);
         if (state.player.health <= 0) {
+            // Last chance — once per run, survive on fumes
+            if (!state.player.lastChanceUsed) {
+                state.player.lastChanceUsed = true;
+                state.player.health = 22;
+                state.player.regenCooldown = 10;
+                state.score = Math.max(0, state.score * 0.7);
+                state.combo.chain = 0;
+                state.combo.multiplier = 1;
+                state.combo.timer = 0;
+                state.cameraShake = 1.2;
+                setStatus("LETZTER AUSWEG — Karosserie kritisch! Garage ansteuern!", 3.5);
+                spawnPopup("LETZTE CHANCE!", "normal");
+                return;
+            }
             state.player.health = 0;
             state.running = false;
             state.screen = "gameover";

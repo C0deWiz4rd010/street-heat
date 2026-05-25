@@ -93,6 +93,8 @@ export function mountHud(root) {
             </div>
         </div>
 
+        <button id="muteBtn" class="mute-btn" aria-label="Ton an/aus" title="Ton an/aus">&#128266;</button>
+
         <div id="speedLines"></div>
         <div id="popup"></div>
         <div id="actionPrompt"></div>
@@ -197,6 +199,7 @@ export function mountHud(root) {
         mapContext: minimap.getContext("2d"),
         speedLines: document.getElementById("speedLines"),
         popup: document.getElementById("popup"),
+        muteBtn: document.getElementById("muteBtn"),
         actionPrompt: document.getElementById("actionPrompt"),
         status: document.getElementById("status"),
         pauseOverlay: document.getElementById("pauseOverlay"),
