@@ -12,6 +12,7 @@ main.js            verdrahtet Renderer, Welt, Runtime, Input, Settings, Audio un
  │   ├─ systems/camera.js   Folgekamera, Heat-Zoom, Shake
  │   ├─ systems/traffic.js  Verkehr: Spawning je Bezirk, Achsenfahrt, Trennung, Beinahe-Treffer
  │   ├─ systems/police.js   Polizei: Rollen, Straßenverfolgung, Sichtlinie, Abgang, Kollisionen
+ │   ├─ systems/player.js   Spielerauto: Steuerung zu Physik, Kollisionen, Nitro, Drift-Score, Schaden, Game Over, Provoke, Autowechsel
  │   ├─ systems/missions.js Missionen: Auswahl aus Daten, Modifier, Bonusziele, Abgabe, Bosse, Fail und Retry
  │   ├─ systems/weather.js  Tag/Nacht, Wetterfarben und -licht, Blitze, Dampf
  │   ├─ systems/tags.js     Graffiti-Tags
@@ -53,7 +54,7 @@ raceSystem.update(dt);
 
 Helferfunktionen (`addScore`, `setStatus`, `spawnPopup` …) sind Funktionsdeklarationen in der Runtime und stehen deshalb schon vor ihrer Textstelle zur Verfügung. Nach jedem Auslagern prüft ein Test-Run, dass nichts fehlt (Import-Check per Parser, Browser-Lauf, `npm test`).
 
-Noch in `systems.js`: Spieler-Update, Pickups, Events, Garage und Economy-Aktionen, dazu die gemeinsamen Helfer (`addScore`, `setStatus`, `spawnParticle` ...), die alle Systeme hineingereicht bekommen. Nächster Kandidat ist der Spieler. `traffic`, `police`, `pickups` und `roadblocks` sind weiter Arrays der Runtime, die Kamera, Minimap und Audio mitlesen.
+Noch in `systems.js`: Pickups, Welt-Events, Roadblocks und Gefahren, Helikopter, Scanner-Zonen, zerstörbare Props, Garage und Economy-Aktionen, Speichern, dazu die gemeinsamen Helfer (`addScore`, `setStatus`, `spawnParticle` ...), die alle Systeme hineingereicht bekommen. Die Datei ist damit vor allem noch Verdrahtung plus diese kleineren Systeme. `traffic`, `police`, `pickups` und `roadblocks` sind weiter Arrays der Runtime, die Kamera, Minimap und Audio mitlesen.
 
 Hinweis zur Reihenfolge: Die Fabriken werden mitten in `createGameRuntime` aufgerufen. Was ihnen als Wert übergeben wird, muss dort schon existieren, deshalb sind die Helfer Funktionsdeklarationen (hoisted) und keine `const`-Pfeilfunktionen.
 
