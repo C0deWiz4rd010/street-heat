@@ -560,6 +560,51 @@ for (const typeId of Object.keys(fleet.CIVILIAN_TYPES)) {
     assert.equal(car.userData.parts.wheels.length, typeId === "scooter" ? 2 : 4, `${typeId}: wheel count`);
 }
 
+// --- Police looks, unmarked reveal, rival variety --------------------------------------------
+const { POLICE_UNITS: policeUnitStats } = await import("../src/config.js");
+assert.deepEqual(Object.keys(fleet.POLICE_LOOKS).sort(), Object.keys(policeUnitStats).sort(), "every police unit has a look and stats");
+for (const [unitId, looks] of Object.entries(fleet.POLICE_LOOKS)) {
+    for (const look of looks) {
+        assert.ok(fleet.BODY_ARCHETYPES[look.body], `${unitId}/${look.id}: body exists`);
+        assert.ok(look.width <= 2.4 && look.length <= 5.6, `${unitId}/${look.id}: fits the street`);
+        assert.ok(look.color || look.colors?.length, `${unitId}/${look.id}: has a colour`);
+        for (const feature of look.features ?? []) assert.ok(parts.PART_NAMES.includes(feature), `${unitId}/${look.id}: unknown feature ${feature}`);
+        assert.ok(["bar", "dome", "grille"].includes(look.lightbar), `${unitId}/${look.id}: known light bar`);
+        const model = fleet.policeModelFor(unitId, 5, () => 0);
+        const car = createCar(model, builderMaterials, { police: true, lightbar: model.lightbar, hidden: model.hidden });
+        assert.ok(car.userData.parts.siren, `${unitId}/${look.id}: has a siren`);
+        let meshCount = 0;
+        car.traverse((node) => { if (node.isMesh) meshCount += 1; });
+        assert.ok(meshCount <= 24, `${unitId}/${look.id}: stays cheap (${meshCount} meshes)`);
+    }
+}
+assert.equal(fleet.policeModelFor("patrol", 0, () => 0.99).id, "police-patrol-cruiser", "the Interceptor needs heat 3");
+assert.ok(["police-patrol-cruiser", "police-patrol-interceptor"].includes(fleet.policeModelFor("patrol", 4, () => 0.99).id));
+assert.equal(fleet.policeModelFor("patrol", 3, () => 0.99).id, "police-patrol-interceptor", "from heat 3 the Interceptor appears");
+assert.equal(wheelLayout(fleet.BODY_ARCHETYPES.motorbike, 0.9, 2.5).length, 2, "the police motorcycle has two wheels");
+assert.ok(vehicleRadius(fleet.policeModelFor("motorcycle")) < vehicleRadius(fleet.policeModelFor("patrol")) && vehicleRadius(fleet.policeModelFor("patrol")) < vehicleRadius(fleet.policeModelFor("van")), "bike < cruiser < SWAT truck");
+
+const unmarkedModel = fleet.policeModelFor("unmarked", 1);
+const hiddenCar = createCar(unmarkedModel, builderMaterials, { police: true, lightbar: unmarkedModel.lightbar, hidden: true });
+const hiddenBeacons = [];
+hiddenCar.traverse((node) => { if (node.isMesh && node.parent === hiddenCar.userData.parts.chassis && node.visible === false) hiddenBeacons.push(node); });
+assert.ok(hiddenBeacons.length >= 4, "an unmarked car starts with its lights off");
+assert.equal(hiddenCar.userData.parts.revealed, false);
+hiddenCar.userData.parts.reveal();
+let stillHidden = 0;
+hiddenCar.traverse((node) => { if (node.isMesh && node.visible === false) stillHidden += 1; });
+assert.equal(stillHidden, 0, "revealing switches every beacon on");
+assert.equal(hiddenCar.userData.parts.revealed, true);
+
+for (let round = 0; round < 25; round += 1) {
+    const rivals = fleet.pickRivalModels(CAR_MODELS, 3, seeded);
+    assert.equal(rivals.length, 3);
+    assert.equal(new Set(rivals.map((rival) => rival.id)).size, 3, "rivals drive different bodies");
+    assert.equal(new Set(rivals.map((rival) => rival.name)).size, 3, "and look different");
+    assert.ok(rivals.every((rival) => fleet.RIVAL_STYLES.some((style) => style.color === rival.color)), "rival colours come from the style presets");
+}
+assert.equal(fleet.pickRivalModels(CAR_MODELS, 2, seeded).length, 2);
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

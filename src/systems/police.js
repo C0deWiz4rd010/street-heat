@@ -2,6 +2,8 @@ import { CAR_MODELS, CONFIG, POLICE_UNITS } from "../config.js";
 import { hasLineOfSight, nearestNode, nextWaypoint } from "../ai/police.js";
 import { clamp, distanceSq, turnToward, wrapAngle } from "../util/math.js";
 import { stepHeatDecay } from "../scoring.js";
+import { policeModelFor } from "../data/vehicles.js";
+import { vehicleRadius } from "../physics/vehicle.js";
 import { createCar } from "../vehicles.js";
 import { obstacleAt, pushOutBuildings, snapStreet } from "../world.js";
 
@@ -149,6 +151,11 @@ export function createPoliceSystem({
                 agent.state = "leave";
             } else if (sees) {
                 agent.state = "chase";
+                if (!agent.revealed) {
+                    agent.revealed = true;
+                    agent.mesh.userData.parts?.reveal?.();
+                    setStatus("Zivilstreife enttarnt!", 1.6);
+                }
                 agent.lastX = state.player.x;
                 agent.lastZ = state.player.z;
             } else if (agent.state === "chase" || agent.state === "leave") {
@@ -243,8 +250,8 @@ export function createPoliceSystem({
             const preX = agent.x + Math.sin(agent.rotation) * agent.speed * dt;
             const preZ = agent.z + Math.cos(agent.rotation) * agent.speed * dt;
             const next = { x: preX, z: preZ };
-            const wallHit = pushOutBuildings(world, next, 1.25);
-            const obstacleHit = obstacleAt(world, next.x, next.z, 1.15);
+            const wallHit = pushOutBuildings(world, next, Math.max(1, agent.radius * 0.9));
+            const obstacleHit = obstacleAt(world, next.x, next.z, Math.max(0.9, agent.radius * 0.8));
             if (wallHit || obstacleHit) {
                 // Phase 5.2: project velocity along wall tangent instead of fixed-angle snap
                 const dispX = next.x - preX;
@@ -300,7 +307,7 @@ export function createPoliceSystem({
                 const tdx = car.x - agent.x;
                 const tdz = car.z - agent.z;
                 const td2 = tdx * tdx + tdz * tdz;
-                const tMin = (car.radius ?? 2.1) + 1.3;
+                const tMin = (car.radius ?? 2.1) + agent.radius * 0.9;
                 if (td2 < tMin * tMin && td2 > 0.01) {
                     const tdist = Math.sqrt(td2);
                     const tnx = tdx / tdist;
@@ -314,7 +321,7 @@ export function createPoliceSystem({
                 }
             }
 
-            if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
+            if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < ((agent.radius + CONFIG.player.radius) * 0.91) ** 2 && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
                 const playerModel = CAR_MODELS[state.playerModelIndex];
                 const playerMass = playerModel.mass ?? 1.0;
@@ -434,7 +441,7 @@ export function createPoliceSystem({
         if (police.length >= CONFIG.police.maxCount) return;
         const unitType = forcedUnitType ?? pickPoliceUnitType();
         const model = createPoliceUnitModel(unitType);
-        const mesh = createCar(model, sharedMaterials, { police: true });
+        const mesh = createCar(model, sharedMaterials, { police: true, lightbar: model.lightbar, hidden: model.hidden });
         const angle = Math.random() * Math.PI * 2;
         const dist = near ? CONFIG.police.spawnDistance + Math.random() * 28 : CONFIG.map.size * 0.45;
         let x = state.player.x + Math.cos(angle) * dist;
@@ -457,6 +464,8 @@ export function createPoliceSystem({
             leaving: false,
             los: false,
             unitType,
+            radius: vehicleRadius(model),
+            revealed: !model.hidden,
             cooldown: 0,
             closeCooldown: 0,
             deployCooldown: unitType === "van" ? 3 : 0,
@@ -469,20 +478,12 @@ export function createPoliceSystem({
         if (heat >= 4 && roll < 0.24) return "van";
         if (heat >= 3 && roll < 0.52) return "suv";
         if (heat >= 2 && roll < 0.78) return "motorcycle";
-        return "patrol";
+        // Early on, some patrols are unmarked: dark cars with hidden lights that reveal themselves in a chase.
+        return heat <= 3 && Math.random() < 0.3 ? "unmarked" : "patrol";
     }
 
     function createPoliceUnitModel(unitType) {
-        if (unitType === "suv") {
-            return { ...CAR_MODELS[1], color: "#e9eef4", trim: "#182a46", name: "Pursuit SUV", maxSpeed: 16.8, acceleration: 22, turn: 2.95 };
-        }
-        if (unitType === "motorcycle") {
-            return { ...CAR_MODELS[2], color: "#f4f7fb", trim: "#18324f", name: "Interceptor Bike", width: 0.96, length: 2.75, height: 0.42, maxSpeed: 22, acceleration: 28, turn: 4.8, roof: "sport" };
-        }
-        if (unitType === "van") {
-            return { ...CAR_MODELS[3], color: "#d9e1eb", trim: "#1a2b45", name: "Blockade Van", maxSpeed: 14.8, acceleration: 18.5, turn: 2.45 };
-        }
-        return { ...CAR_MODELS[0], color: "#f4f7fb", trim: "#1c4274", name: "Patrol Cruiser", maxSpeed: 19.2, acceleration: 24, turn: 3.4 };
+        return policeModelFor(unitType, state.wanted.level);
     }
 
     function getPoliceTargetSpeed(agent) {

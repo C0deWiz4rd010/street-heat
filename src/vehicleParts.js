@@ -152,6 +152,17 @@ const CIVILIAN_PARTS = {
             trim: [cylinder(0.45, 0.06, { x: 0, y: roofY + 0.55, z: roofZ }, 12, { x: 0.5, z: 0 })],
         };
     },
+    doorPanels({ L, W, H }) {
+        return { accent: both.map((side) => box({ x: 0.04, y: H * 0.56, z: L * 0.36 }, { x: side * (W / 2 + 0.01), y: -H * 0.02, z: -L * 0.03 })) };
+    },
+    armorPlates({ L, W, H, roofZ, roofY }) {
+        return {
+            dark: [
+                ...both.map((side) => box({ x: 0.08, y: H * 0.5, z: L * 0.34 }, { x: side * (W / 2 + 0.03), y: 0, z: -L * 0.02 })),
+                box({ x: W * 0.5, y: 0.07, z: L * 0.2 }, { x: 0, y: roofY + 0.06, z: roofZ - 0.2 }),
+            ],
+        };
+    },
     surfboard({ L, roofZ, roofY }) {
         return { accent: [box({ x: 0.34, y: 0.04, z: L * 0.72 }, { x: 0, y: roofY + 0.14, z: roofZ })] };
     },

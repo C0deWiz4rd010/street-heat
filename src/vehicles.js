@@ -249,13 +249,41 @@ export function createCar(model, sharedMaterials, options = {}) {
     const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius * (wheelSpots[0]?.scale ?? 1), tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
-        const barY = H / 2 + cabin.height + 0.12;
-        addBox(chassis, { x: W * 0.75, y: 0.12, z: 0.46 }, { x: 0, y: barY, z: 0 }, accentMat, false, false);
+        const style = options.lightbar ?? "bar";
         const blue = createMaterial("#326dff", { emissive: "#326dff", emissiveIntensity: 0.9 });
         const red = createMaterial("#ff344c", { emissive: "#ff344c", emissiveIntensity: 0.9 });
-        addBox(chassis, { x: W * 0.35, y: 0.13, z: 0.4 }, { x: -W * 0.18, y: barY + 0.08, z: 0 }, blue, false, false);
-        addBox(chassis, { x: W * 0.35, y: 0.13, z: 0.4 }, { x: W * 0.18, y: barY + 0.08, z: 0 }, red, false, false);
+        const beacons = [];
+        const addBeacon = (geometry, material, position, shadow = false) => {
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(position.x, position.y, position.z);
+            mesh.castShadow = shadow;
+            chassis.add(mesh);
+            beacons.push(mesh);
+            return mesh;
+        };
+        const barY = H / 2 + cabin.height + 0.12;
+        if (style === "bar") {
+            addBeacon(new THREE.BoxGeometry(W * 0.75, 0.12, 0.46), accentMat, { x: 0, y: barY, z: 0 });
+            addBeacon(new THREE.BoxGeometry(W * 0.35, 0.13, 0.4), blue, { x: -W * 0.18, y: barY + 0.08, z: 0 });
+            addBeacon(new THREE.BoxGeometry(W * 0.35, 0.13, 0.4), red, { x: W * 0.18, y: barY + 0.08, z: 0 });
+        } else if (style === "dome") {
+            addBeacon(new THREE.CylinderGeometry(0.2, 0.2, 0.16, 10, 1, false, 0, Math.PI), red, { x: 0, y: H / 2 + cabin.height + 0.2, z: 0.1 });
+            addBeacon(new THREE.CylinderGeometry(0.2, 0.2, 0.16, 10, 1, false, Math.PI, Math.PI), blue, { x: 0, y: H / 2 + cabin.height + 0.2, z: 0.1 });
+        } else {
+            // grille: strobes on the nose and behind the rear window, no roof bar
+            for (const [side, material] of [[-1, blue], [1, red]]) {
+                addBeacon(new THREE.BoxGeometry(0.24, 0.08, 0.08), material, { x: side * W * 0.24, y: H / 2 - 0.1, z: L / 2 - 0.14 });
+                addBeacon(new THREE.BoxGeometry(0.3, 0.07, 0.07), material, { x: side * W * 0.2, y: H / 2 + cabin.height * 0.5, z: cabin.from * L + 0.22 });
+            }
+        }
+        for (const mesh of beacons) mesh.visible = !options.hidden;
         parts.siren = { red, blue, offset: Math.random() * 2 };
+        parts.revealed = !options.hidden;
+        // Unmarked cars switch their lights on when they start a chase.
+        parts.reveal = () => {
+            for (const mesh of beacons) mesh.visible = true;
+            parts.revealed = true;
+        };
     }
 
     if (options.taxi) {

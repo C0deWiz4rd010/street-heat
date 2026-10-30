@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { CAR_MODELS } from "./config.js";
-import { CIVILIAN_TYPES, SHOWCASE_OVERRIDES, buildCivilian } from "./data/vehicles.js";
+import { CIVILIAN_TYPES, POLICE_LOOKS, SHOWCASE_OVERRIDES, buildCivilian } from "./data/vehicles.js";
 import { createCar, setHeadlightBeamLevel, updateCarVisuals } from "./vehicles.js";
 
 /**
@@ -20,7 +20,20 @@ export function createGallery({ renderer, sharedMaterials }) {
 
     const rows = [
         { label: "Basis", models: CAR_MODELS.map((model) => ({ model, options: {} })) },
-        { label: "Polizei", models: CAR_MODELS.map((model) => ({ model: { ...model, color: "#f4f7fb", trim: "#1c4274" }, options: { police: true } })) },
+        {
+            label: "Polizei",
+            models: [
+                ...Object.values(POLICE_LOOKS).flat().map((look) => ({
+                    model: { ...look, color: look.color ?? look.colors[0], features: [...(look.features ?? [])] },
+                    options: { police: true, lightbar: look.lightbar, hidden: look.hidden },
+                })),
+                // The unmarked car again with its lights revealed.
+                {
+                    model: { ...POLICE_LOOKS.unmarked[0], name: "Zivilstreife (enttarnt)", color: POLICE_LOOKS.unmarked[0].colors[0], features: [] },
+                    options: { police: true, lightbar: "grille", hidden: false },
+                },
+            ],
+        },
         {
             label: "Teile",
             models: SHOWCASE_OVERRIDES.map((override) => ({ model: { ...CAR_MODELS[override.base], ...override.model }, options: {} })),

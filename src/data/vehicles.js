@@ -112,6 +112,31 @@ Object.assign(BODY_ARCHETYPES, {
     },
 });
 
+// Police bodies.
+Object.assign(BODY_ARCHETYPES, {
+    suv: {
+        id: "suv",
+        profile: { noseX: 0.34, tailX: 0.46, noseDrop: 0.5, tailDrop: 0.06 },
+        cabin: { from: -0.4, to: 0.16, height: 0.52, rake: 0.05 },
+        wheels: STD_WHEELS,
+        features: [],
+    },
+    swat: {
+        id: "swat",
+        profile: { noseX: 0.42, tailX: 0.48, noseDrop: 0.45, tailDrop: 0.02 },
+        cabin: { from: -0.28, to: 0.3, height: 0.5, rake: 0.02 },
+        wheels: { ...STD_WHEELS, base: 0.33 },
+        features: [],
+    },
+    motorbike: {
+        id: "motorbike",
+        profile: { noseX: 0.4, tailX: 0.36, noseDrop: 0.4, tailDrop: 0.35 },
+        cabin: { from: 0.1, to: 0.3, height: 0.16, rake: 0.06 },
+        wheels: { layout: "bike", track: 0, base: 0.37, radius: 0.36, y: -0.3, scale: 0.85 },
+        features: ["rider"],
+    },
+});
+
 export const DEFAULT_ARCHETYPE = "coupe";
 
 /** Archetype id of a car model. `roof` is the legacy name of the same field. */
@@ -258,4 +283,72 @@ export function buildCivilian(typeId, districtId, rng = Math.random) {
         wheelStyle: pickFrom(type.wheelStyles ?? ["disc"], rng),
         tireStyle: type.tireStyle,
     };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Police looks. Stats stay in POLICE_UNITS (config.js); this is only what a unit looks like.
+// `lightbar`: bar (roof), dome (single beacon), grille (front and rear strobes); `hidden` lights stay off until the
+// unit starts a chase (unmarked cars).
+
+export const POLICE_LOOKS = {
+    patrol: [
+        { id: "cruiser", name: "Patrol Cruiser", body: "sedan", length: 4.6, width: 1.9, height: 0.74, color: "#1b2433", trim: "#e8edf3", features: ["doorPanels"], lightbar: "bar" },
+        { id: "interceptor", name: "Interceptor", body: "sport", length: 4.3, width: 1.9, height: 0.62, color: "#1c3f78", trim: "#0f1722", features: ["doorPanels"], lightbar: "grille", lights: "slit", minHeat: 3 },
+    ],
+    suv: [
+        { id: "pursuit", name: "Pursuit SUV", body: "suv", length: 5, width: 2.15, height: 0.95, color: "#e9eef4", trim: "#182a46", features: ["bullBar", "roofRack"], lightbar: "bar", tireStyle: "fat" },
+    ],
+    van: [
+        { id: "swat", name: "SWAT-Truck", body: "swat", length: 5.4, width: 2.3, height: 1.1, color: "#272d36", trim: "#0f1318", features: ["bullBar", "armorPlates", "sideSteps"], lightbar: "bar", tireStyle: "fat" },
+    ],
+    motorcycle: [
+        { id: "bike", name: "Interceptor Bike", body: "motorbike", length: 2.5, width: 0.9, height: 0.55, color: "#f4f7fb", trim: "#18324f", lightbar: "dome" },
+    ],
+    unmarked: [
+        { id: "unmarked", name: "Zivilstreife", body: "sedan", length: 4.5, width: 1.85, height: 0.72, colors: ["#2b2f36", "#4a5560", "#3a2f2f", "#26324a"], trim: "#101318", hidden: true, lightbar: "grille" },
+    ],
+};
+
+/** Picks the look of a police unit; some looks only appear from a certain heat level (the Interceptor from 3). */
+export function policeModelFor(unitType, heat = 0, rng = Math.random) {
+    const looks = POLICE_LOOKS[unitType] ?? POLICE_LOOKS.patrol;
+    const eligible = looks.filter((look) => (look.minHeat ?? 0) <= heat);
+    const look = pickFrom(eligible.length ? eligible : looks, rng);
+    return {
+        ...look,
+        id: `police-${unitType}-${look.id}`,
+        unitType,
+        color: look.color ?? pickFrom(look.colors, rng),
+        features: [...(look.features ?? [])],
+    };
+}
+
+// ---------------------------------------------------------------------------------------------------
+// Race rivals: the field should look like different cars, not like the same car in two colours.
+
+export const RIVAL_STYLES = [
+    { name: "Rivale Rallye", color: "#79ffb3", features: ["roofRack", "bullBar"], wheelStyle: "fiveSpoke", lights: "slit" },
+    { name: "Rivale GT", color: "#ff7ad9", features: ["spoilerGT", "hoodScoop"], wheelStyle: "neonRing", lights: "ledBar" },
+    { name: "Rivale Muscle", color: "#ffb13c", features: ["fins", "exhaustStacks"], wheelStyle: "turbine", lights: "quad", tireStyle: "fat" },
+    { name: "Rivale Street", color: "#4fc3ff", features: ["hoodScoop"], wheelStyle: "disc", lights: "default" },
+];
+
+function shuffled(list, rng) {
+    const copy = [...list];
+    for (let i = copy.length - 1; i > 0; i -= 1) {
+        const j = Math.floor(rng() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+}
+
+/** `count` rival models built on different bodies (as far as the base list allows) with different looks. */
+export function pickRivalModels(baseModels, count, rng = Math.random) {
+    const bases = shuffled(baseModels, rng);
+    const styles = shuffled(RIVAL_STYLES, rng);
+    return Array.from({ length: count }, (_, index) => ({
+        ...bases[index % bases.length],
+        ...styles[index % styles.length],
+        trim: "#14181e",
+    }));
 }

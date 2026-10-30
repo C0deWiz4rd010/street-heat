@@ -103,6 +103,7 @@ export const RACE = {
 
 export const POLICE_UNITS = {
     patrol: { turnRate: 2.35, mass: 1.1, damageFactor: 0.9, wallSpeedFactor: 0.7, hitSpeedFactor: 0.42, chaseSpeed: 11.5, chaseSpeedPerHeat: 1.4, nightBonus: 0.8, idleSpeed: 8 },
+    unmarked: { turnRate: 2.35, mass: 1.0, damageFactor: 0.85, wallSpeedFactor: 0.7, hitSpeedFactor: 0.42, chaseSpeed: 11.8, chaseSpeedPerHeat: 1.4, nightBonus: 0.8, idleSpeed: 8 },
     suv: { turnRate: 1.85, mass: 1.65, damageFactor: 1.1, wallSpeedFactor: 0.78, hitSpeedFactor: 0.42, chaseSpeed: 10.8, chaseSpeedPerHeat: 1.1, nightBonus: 0, idleSpeed: 8 },
     van: { turnRate: 1.55, mass: 1.9, damageFactor: 1.2, wallSpeedFactor: 0.7, hitSpeedFactor: 0.42, chaseSpeed: 9.2, chaseSpeedPerHeat: 0.85, nightBonus: 0, idleSpeed: 8 },
     motorcycle: { turnRate: 3.2, mass: 0.62, damageFactor: 0.7, wallSpeedFactor: 0.62, hitSpeedFactor: 0.12, chaseSpeed: 13.5, chaseSpeedPerHeat: 1.35, nightBonus: 0.8, idleSpeed: 9.5 },

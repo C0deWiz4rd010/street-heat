@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { CAR_MODELS, CONFIG, RACE } from "../config.js";
 import { nextWaypoint, nearestNode } from "../ai/police.js";
 import { clamp, turnToward, wrapAngle } from "../util/math.js";
+import { pickRivalModels } from "../data/vehicles.js";
 import { createCar, updateCarVisuals } from "../vehicles.js";
 import { pushOutBuildings } from "../world.js";
 
@@ -24,9 +25,10 @@ export function createRaceSystem({
         const checkpoints = getDistrictWaypointRoute(district.id, RACE.checkpoints, state.mission.stage + 2);
         const hub = nearestNode(roadGraph, event.x, event.z);
         const racers = [];
+        const rivalModels = pickRivalModels(CAR_MODELS, RACE.rivals);
         for (let index = 0; index < RACE.rivals; index += 1) {
-            const model = { ...CAR_MODELS[index % 2 === 0 ? 2 : 0], name: "Rivale", color: index === 0 ? "#79ffb3" : "#ff7ad9", trim: "#14181e" };
-            const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
+            const model = rivalModels[index];
+            const mesh = createCar(model, sharedMaterials);
             const x = hub.x + (index === 0 ? -2.4 : 2.4);
             const z = hub.z + 3;
             mesh.position.set(x, 0.37, z);
