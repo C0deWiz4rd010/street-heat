@@ -1,10 +1,14 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, DISTRICT_CONTRACTS, PAINTS, POLICE_UNITS, RACE, REPUTATION_GAINS, REPUTATION_TIERS, TAGS_PER_DISTRICT, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, PAINTS, POLICE_UNITS, REPUTATION_GAINS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
 import { clamp, distanceSq, turnToward, axisVelocity, axisYaw, wrapAngle } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
 import { registerCombo, stepHeatDecay, tickCombo } from "./scoring.js";
-import { generateTags, reputationTier } from "./progression.js";
+import { reputationTier } from "./progression.js";
+import { createCameraSystem } from "./systems/camera.js";
+import { createRaceSystem } from "./systems/race.js";
+import { createTagSystem } from "./systems/tags.js";
+import { createWeatherSystem } from "./systems/weather.js";
 import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { SAVE_VERSION, clearProfile, createDefaultProfile, saveProfile } from "./save.js";
@@ -62,10 +66,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     markShared(pickupGeo, eventGeo, hazardGeo);
     const roadGraph = buildRoadGraph();
     const crashLog = [];
-    const tempTarget = new THREE.Vector3();
-    const cameraBase = new THREE.Vector3();
-    let cameraBaseReady = false;
-    let cameraZoom = 0;
+    const cameraSystem = createCameraSystem({ state, camera, post, police });
+    const weatherFx = createWeatherSystem({ state, scene, renderer, lights, post, audio, world, effects });
     const debugClock = { frames: 0, timer: 0 };
     let scannerCharge = 0;
     let activeScannerZoneId = null;
@@ -146,7 +148,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.contract.claimed = false;
         }
         state.contract.completed = false;
-        endRace(true);
+        raceSystem.end(true);
         state.helicopter.active = false;
         state.helicopter.pressure = 0;
         state.helicopter.cooldown = 0;
@@ -191,7 +193,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         setMission(1);
         for (let index = 0; index < CONFIG.pickups.startCount; index += 1) spawnPickup();
         for (let index = 0; index < CONFIG.traffic.startCount; index += 1) spawnTraffic();
-        applyWeatherVisuals();
+        weatherFx.apply();
         persistProfile();
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
     }
@@ -242,8 +244,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateTimeOfDay(dt);
         updateWeather(dt);
         updateWorldEvents(dt);
-        updateRace(dt);
-        updateTags(dt);
+        raceSystem.update(dt);
+        tagSystem.update(dt);
         updatePickups(dt);
         updateRoadblocks(dt);
         updateHazards(dt);
@@ -284,14 +286,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         // Phase 6.1: Provoke key (Q) — handled outside physics step so it triggers once per real frame
         if (input.consume("q")) tryProvoke();
         updateDebug(realDt);
-        updateWorldVisuals(realDt);
+        weatherFx.update(realDt);
 
         if (!state.running || state.paused || state.screen !== "playing") {
             physicsAccumulator = 0;
             updateParticles(realDt);
             updateTimeOfDay(realDt, true);
             updateWeather(realDt, true);
-            updateCamera(realDt);
+            cameraSystem.update(realDt);
             audio?.update(state, realDt);
             renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
             post.render(realDt, state.player);
@@ -310,7 +312,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateParticles(realDt);
         updateSkidMarks(realDt);
         updateVehicleVisuals(realDt);
-        updateCamera(realDt);
+        cameraSystem.update(realDt);
         audio?.update(state, realDt);
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
         post.render(realDt, state.player);
@@ -1603,191 +1605,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
-    // ---- Graffiti tags: 10 per district, picked up by driving close. -------------------------------
-    const tagDefs = generateTags({
-        buildings: world.buildings,
-        districtIds: DISTRICTS.map((district) => district.id),
-        districtIdOf: (x, z) => getDistrictAt(x, z).id,
-        perDistrict: TAGS_PER_DISTRICT,
+    const tagSystem = createTagSystem({ state, scene, world, getDistrictAt, addCash, addReputation, addScore, refreshProgress, setStatus, spawnParticle, spawnPopup });
+    const raceSystem = createRaceSystem({
+        state, scene, world, audio, sharedMaterials, roadGraph,
+        getDistrictAt, getDistrictWaypointRoute, distanceTo, removeMesh,
+        addCash, addReputation, addScore, refreshProgress, setStatus, spawnPopup, updateWanted,
     });
-    const tagGeometry = new THREE.PlaneGeometry(2.4, 1.5).rotateX(-Math.PI / 2);
-    const tagMaterials = Object.fromEntries(DISTRICTS.map((district) => [
-        district.id,
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(district.color).multiplyScalar(2.2), side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
-    ]));
-    const tags = tagDefs.map((def, index) => {
-        const mesh = new THREE.Mesh(tagGeometry, tagMaterials[def.districtId]);
-        mesh.position.set(def.x, def.y, def.z);
-        mesh.rotation.y = (index * 1.7) % Math.PI;
-        scene.add(mesh);
-        return { ...def, mesh, collected: state.tags.includes(def.id) };
-    });
-    for (const tag of tags) tag.mesh.visible = !tag.collected;
-    world.tags = tags;
-
-    function updateTags(dt) {
-        const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 280);
-        for (const material of Object.values(tagMaterials)) material.opacity = 0.55 + 0.4 * pulse;
-        for (const tag of tags) {
-            if (tag.collected) continue;
-            tag.mesh.position.y = tag.y + (tag.roof ? Math.sin(performance.now() / 500 + tag.x) * 0.12 : 0);
-            if (distanceSq(state.player.x, state.player.z, tag.x, tag.z) > 4.2 * 4.2) continue;
-            tag.collected = true;
-            tag.mesh.visible = false;
-            state.tags.push(tag.id);
-            state.stats.tagsRun += 1;
-            const district = DISTRICTS.find((entry) => entry.id === tag.districtId);
-            const owned = tags.filter((entry) => entry.districtId === tag.districtId && entry.collected).length;
-            addScore(150, false, "other");
-            const cash = addCash(40);
-            addReputation(tag.districtId, REPUTATION_GAINS.tag);
-            spawnParticle(tag.x, tag.z, district?.color ?? "#ffffff", 14);
-            setStatus(`Graffiti-Tag ${owned}/${TAGS_PER_DISTRICT} in ${district?.name}. +$${cash}`, 1.8);
-            if (owned === TAGS_PER_DISTRICT) {
-                addCash(500);
-                addReputation(tag.districtId, REPUTATION_GAINS.tagSet);
-                spawnPopup(`${district?.name.toUpperCase()} KOMPLETT`, "bounty");
-                setStatus(`Alle Tags in ${district?.name} gesprüht! Bonus +$500.`, 3.5);
-            }
-            refreshProgress();
-        }
-    }
-
-    // ---- Street race: start ring -> 4 checkpoints against 2 AI rivals. -------------------------------
-    const raceMarker = new THREE.Mesh(
-        new THREE.TorusGeometry(RACE.radius * 0.8, 0.28, 10, 36).rotateX(Math.PI / 2),
-        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.5, 2.4, 1.2), transparent: true, opacity: 0.85 })
-    );
-    raceMarker.visible = false;
-    scene.add(raceMarker);
-
-    function startRace(event) {
-        const district = getDistrictAt(event.x, event.z);
-        const checkpoints = getDistrictWaypointRoute(district.id, RACE.checkpoints, state.mission.stage + 2);
-        const hub = nearestNode(roadGraph, event.x, event.z);
-        const racers = [];
-        for (let index = 0; index < RACE.rivals; index += 1) {
-            const model = { ...CAR_MODELS[index % 2 === 0 ? 2 : 0], name: "Rivale", color: index === 0 ? "#79ffb3" : "#ff7ad9", trim: "#14181e" };
-            const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
-            const x = hub.x + (index === 0 ? -2.4 : 2.4);
-            const z = hub.z + 3;
-            mesh.position.set(x, 0.37, z);
-            scene.add(mesh);
-            racers.push({
-                mesh, x, z, rotation: 0, speed: 0, index: 0, finished: false,
-                cruise: RACE.rivalSpeed + index * 0.7 + Math.min(4, state.mission.stage * 0.25),
-                wpTimer: 0, wpX: x, wpZ: z,
-            });
-        }
-        state.race = { active: true, checkpoints, racers, player: { index: 0 }, order: [], timer: RACE.timeLimit, districtId: district.id };
-        updateWanted(state.wanted.level + 1);
-        raceMarker.visible = true;
-        spawnPopup("RENNEN!", "bounty");
-        setStatus(`Illegales Rennen in ${district.name}: ${RACE.checkpoints} Checkpoints, ${RACE.rivals} Rivalen. Sei Erster!`, 3.5);
-        audio?.mission?.();
-    }
-
-    function racePlaceNow() {
-        const race = state.race;
-        const cp = race.checkpoints[race.player.index];
-        const mine = race.player.index;
-        const myDist = cp ? distanceTo(cp.x, cp.z) : 0;
-        let place = 1;
-        for (const racer of race.racers) {
-            if (racer.finished) {
-                place += 1;
-                continue;
-            }
-            const target = race.checkpoints[racer.index];
-            const theirDist = target ? Math.hypot(target.x - racer.x, target.z - racer.z) : 0;
-            if (racer.index > mine || (racer.index === mine && theirDist < myDist)) place += 1;
-        }
-        return place;
-    }
-
-    function updateRace(dt) {
-        const race = state.race;
-        if (!race?.active) return;
-        race.timer -= dt;
-        const total = race.checkpoints.length;
-
-        const next = race.checkpoints[race.player.index];
-        if (next) {
-            raceMarker.position.set(next.x, 0.5, next.z);
-            raceMarker.rotation.y += dt * 1.5;
-            if (distanceTo(next.x, next.z) < RACE.radius) {
-                race.player.index += 1;
-                audio?.nearMiss?.();
-                if (race.player.index >= total) {
-                    endRace(false, race.racers.filter((racer) => racer.finished).length + 1);
-                    return;
-                }
-                setStatus(`Checkpoint ${race.player.index}/${total} | Platz ${racePlaceNow()}/${race.racers.length + 1}`, 1.4);
-            }
-        }
-
-        for (const racer of race.racers) {
-            if (racer.finished) continue;
-            const cp = race.checkpoints[racer.index];
-            racer.wpTimer -= dt;
-            if (racer.wpTimer <= 0) {
-                const wp = nextWaypoint(roadGraph, racer.x, racer.z, cp.x, cp.z);
-                racer.wpX = wp.x;
-                racer.wpZ = wp.z;
-                racer.wpTimer = 0.3;
-            }
-            const diff = wrapAngle(Math.atan2(racer.wpX - racer.x, racer.wpZ - racer.z) - racer.rotation);
-            racer.rotation = turnToward(racer.rotation, racer.x, racer.z, racer.wpX, racer.wpZ, 2.8 * dt);
-            // Rubber band: rivals ease off when far ahead and push when the player is close behind.
-            const lead = racer.index - race.player.index;
-            const speedTarget = racer.cruise * (Math.abs(diff) > 0.9 ? 0.55 : 1) * (lead > 0 ? 0.92 : lead < 0 ? 1.08 : 1);
-            racer.speed += (speedTarget - racer.speed) * dt * 2.2;
-            const moved = { x: racer.x + Math.sin(racer.rotation) * racer.speed * dt, z: racer.z + Math.cos(racer.rotation) * racer.speed * dt };
-            if (pushOutBuildings(world, moved, 1.25)) {
-                racer.speed *= 0.6;
-                racer.rotation += 0.9 * Math.sign(diff || 1);
-            }
-            racer.x = clamp(moved.x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
-            racer.z = clamp(moved.z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
-            racer.mesh.position.set(racer.x, 0.37, racer.z);
-            racer.mesh.rotation.y = racer.rotation;
-            updateCarVisuals(racer.mesh, dt, { speed: racer.speed });
-            if (Math.hypot(cp.x - racer.x, cp.z - racer.z) < RACE.radius + 2) {
-                racer.index += 1;
-                if (racer.index >= total) {
-                    racer.finished = true;
-                    race.order.push(racer);
-                    setStatus("Ein Rivale ist im Ziel!", 1.4);
-                }
-            }
-        }
-
-        if (race.timer <= 0) endRace(false, 0);
-    }
-
-    /** place: 1..n finished, 0 = out of time. `silent` just tears the race down (reset). */
-    function endRace(silent, place = 0) {
-        const race = state.race;
-        if (!race) return;
-        for (const racer of race.racers) removeMesh(racer.mesh);
-        raceMarker.visible = false;
-        state.race = null;
-        if (silent) return;
-        const payout = RACE.payouts[place - 1];
-        if (!payout) {
-            setStatus(place === 0 ? "Rennen verloren: Zeit abgelaufen." : "Rennen beendet ohne Platzierung.", 2.6);
-            return;
-        }
-        addScore(payout.score, true, "events");
-        const cash = addCash(payout.cash);
-        addReputation(race.districtId, payout.rep);
-        state.stats.events += 1;
-        state.lifetime.events += 1;
-        refreshProgress();
-        spawnPopup(`PLATZ ${place}!`, "bounty");
-        setStatus(`Rennen: Platz ${place} von ${race.racers.length + 1}. Preisgeld +$${cash}.`, 3.2);
-        audio?.mission?.();
-    }
 
     function updateDistrict() {
         const nextDistrict = getDistrictAt(state.player.x, state.player.z);
@@ -1812,7 +1635,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.time.label = nextPhase === "night" ? "Nacht" : "Tag";
         state.time.timer = nextPhase === "night" ? 56 : 74;
         state.time.cycle += 1;
-        applyWeatherVisuals();
+        weatherFx.apply();
         setStatus(
             nextPhase === "night"
                 ? "Nacht fällt ein. Mehr Neon, mehr Suchlichter, höhere Event-Auszahlungen."
@@ -1831,7 +1654,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.weather.label = WEATHER_MODES[nextMode].label;
             state.weather.timer = 32 + Math.random() * 34;
             state.weather.intensity = nextMode === "clear" ? 0 : 1;
-            applyWeatherVisuals();
+            weatherFx.apply();
             setStatus(`Wetterwechsel: ${state.weather.label}.`, 1.8);
         }
 
@@ -1879,7 +1702,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.worldEvent.x = event.x;
             state.worldEvent.z = event.z;
             if (event.kind === "race" && distanceSq(state.player.x, state.player.z, event.x, event.z) < (event.collectRadius ?? 13) ** 2) {
-                if (!state.race?.active) startRace(event);
+                if (!state.race?.active) raceSystem.start(event);
                 removeWorldEvent(index);
                 continue;
             }
@@ -1906,102 +1729,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
-    function updateCamera(dt) {
-        const player = state.player;
 
-        // Slow orbit for menu / garage screens
-        if (state.screen === "menu" || state.screen === "garage") {
-            const t = performance.now() * 0.00025;
-            const orbitR = 58;
-            const targetX = Math.cos(t) * orbitR;
-            const targetZ = Math.sin(t) * orbitR;
-            tempTarget.set(targetX, 42, targetZ);
-            camera.position.lerp(tempTarget, 1 - Math.exp(-1.2 * dt));
-            cameraBase.copy(camera.position);
-            cameraBaseReady = true;
-            camera.lookAt(0, 0, 0);
-            const targetFov = CONFIG.camera.fovBase;
-            camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-2 * dt));
-            camera.updateProjectionMatrix();
-            return;
-        }
-
-        const forwardX = Math.sin(player.rotation);
-        const forwardZ = Math.cos(player.rotation);
-        const latX = Math.cos(player.rotation);
-        const latZ = -Math.sin(player.rotation);
-        const speedMag = player.speedMag ?? Math.abs(player.speed);
-        const maxSpeed = (CAR_MODELS[state.playerModelIndex]?.maxSpeed ?? 22) * 1.3;
-        const speedRatio = Math.min(1, speedMag / maxSpeed);
-
-        // Lateral velocity lean — camera shifts slightly in slide direction
-        const vx = player.vx ?? 0;
-        const vz = player.vz ?? 0;
-        const latSpeed = vx * latX + vz * latZ;
-        const leanX = latX * latSpeed * 0.06;
-        const leanZ = latZ * latSpeed * 0.06;
-
-        // Heat and cops close by raise the camera so more of the chase stays visible.
-        const cameraMode = CONFIG.camera.modes[state.settings?.cameraMode ?? state.cameraMode] ?? CONFIG.camera.modes.normal;
-        let copsNear = 0;
-        for (const agent of police) {
-            if (distanceSq(player.x, player.z, agent.x, agent.z) < 30 * 30) copsNear += 1;
-        }
-        const zoomTarget = Math.min(CONFIG.camera.zoomMax, state.wanted.level * CONFIG.camera.zoomPerHeat + copsNear * CONFIG.camera.zoomPerCop);
-        cameraZoom += (zoomTarget - cameraZoom) * (1 - Math.exp(-1.5 * dt));
-
-        const speedLift = Math.min(3.5, speedMag * speedMag * 0.0055);
-        tempTarget.set(
-            player.x - forwardX * (cameraMode.backOffset + cameraZoom * 0.4) + leanX,
-            cameraMode.height + cameraZoom + speedLift,
-            player.z - forwardZ * (cameraMode.backOffset + cameraZoom * 0.4) + leanZ
-        );
-
-        // Phase 4: adaptive position-lerp (FPS-invariant)
-        const turnInputMag = Math.abs((state.lastTurnInput ?? 0));
-        const driftFactor = Math.min(1, (player.drift ?? 0));
-        const kPos = CONFIG.camera.followLerp + speedRatio * 3.5 + driftFactor * 1.2 + turnInputMag * 0.8;
-        // The smoothed base position never receives the shake offset, so shake cannot feed back into the lerp.
-        if (!cameraBaseReady) {
-            cameraBase.copy(camera.position);
-            cameraBaseReady = true;
-        }
-        cameraBase.lerp(tempTarget, 1 - Math.exp(-kPos * dt));
-        camera.position.copy(cameraBase);
-        post.setSpeed(speedRatio);
-
-        // Phase 4: Shake-Profile (impact + engine + drift composite)
-        const engineShake = speedRatio > 0.9 ? (speedRatio - 0.9) * 0.6 : 0;
-        const driftShake = driftFactor > 0.7 ? (driftFactor - 0.7) * 0.55 : 0;
-        const shakeScale = state.settings ? (state.settings.reducedMotion ? 0 : state.settings.shake) : 1;
-        const composite = ((state.cameraShake ?? 0) + engineShake + driftShake) * shakeScale;
-        if (state.cameraShake > 0) {
-            state.cameraShake = Math.max(0, state.cameraShake - dt * 3.2);
-        }
-        if (composite > 0.01) {
-            const shakeTime = performance.now() * 0.018;
-            camera.position.x += Math.sin(shakeTime * 7.3) * composite * 0.55;
-            camera.position.z += Math.sin(shakeTime * 5.9 + 1.2) * composite * 0.55;
-        }
-
-        // Dynamic FOV — widens with speed (+ provoke kick)
-        const provokeFovKick = (state.provoke?.fxTimer ?? 0) > 0 ? 6 : 0;
-        const targetFov = CONFIG.camera.fovBase + speedRatio * (CONFIG.camera.fovMax - CONFIG.camera.fovBase) + provokeFovKick;
-        camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-2.8 * dt));
-        camera.updateProjectionMatrix();
-
-        // Phase 4: lateral + steering look-ahead, drift-lead
-        const lookAheadFwd = speedMag * 0.24;
-        const lookAheadLat = latSpeed * 0.35 + (state.lastTurnInput ?? 0) * speedMag * 0.18;
-        camera.lookAt(
-            player.x + forwardX * lookAheadFwd + latX * lookAheadLat,
-            0,
-            player.z + forwardZ * lookAheadFwd + latZ * lookAheadLat
-        );
-        if (composite > 0.01) {
-            camera.rotateZ(Math.sin(performance.now() * 0.13) * composite * 0.018);
-        }
-    }
 
     function spawnPickup() {
         const district = chooseSpawnDistrict("pickup");
@@ -3205,88 +2933,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return `${obstacle.label ?? "Prop"} zerlegt. +${reward} Score.`;
     }
 
-    const visualColor = new THREE.Color();
-    const NIGHT_TINT = new THREE.Color("#071018");
-    const SUN_DAY = new THREE.Color("#fff7df");
-    const SUN_DUSK = new THREE.Color("#ff8a4a");
-    const GLOW_DAY = new THREE.Color("#63c8ff");
-    const GLOW_NIGHT = new THREE.Color("#69d0ff");
-    const lerp = (a, b, t) => a + (b - a) * t;
-    let lightningTimer = 0;
-    let secondFlash = 0;
-
-    function applyWeatherVisuals() {
-        const mode = state.weather.mode;
-        const weather = WEATHER_MODES[mode] ?? WEATHER_MODES.clear;
-        const day = state.time.daylight ?? 1;
-        const smoothDay = day * day * (3 - 2 * day);
-        const n = 1 - smoothDay;
-        visualColor.set(weather.color).lerp(NIGHT_TINT, 0.38 * n);
-        scene.background = visualColor;
-        if (scene.fog) {
-            scene.fog.color.copy(visualColor);
-            const fogNear = mode === "fog" ? 20 : mode === "storm" ? 28 : 48;
-            const fogFar = mode === "fog" ? 72 : mode === "storm" ? 102 : 130;
-            scene.fog.near = fogNear * (1 - 0.08 * n);
-            scene.fog.far = fogFar * (1 - 0.1 * n);
-        }
-        if (lights) {
-            lights.ambient.intensity = lerp(mode === "storm" ? 0.92 : 1.25, 0.7, n);
-            lights.sun.intensity = lerp(mode === "storm" ? 2.6 : 4.8, mode === "storm" ? 0.85 : 0.55, n);
-            lights.sun.color.copy(SUN_DAY).lerp(SUN_DUSK, 4 * smoothDay * n * 0.9);
-            lights.nightGlow.intensity = lerp(mode === "fog" ? 1.05 : 0.9, 1.7, n);
-            lights.nightGlow.color.copy(GLOW_DAY).lerp(GLOW_NIGHT, n);
-        }
-        renderer.toneMappingExposure = lerp(mode === "storm" ? 0.98 : 1.08, 0.92, n);
-        post.setAtmosphere(visualColor, n, mode);
-        post.setDaylight(smoothDay);
-    }
-
-    /** Per-frame: ease day/night and wetness, run storm lightning, animate the world. */
-    // Industrial steam: smokestack and tank vents puff while the player is nearby.
-    const steamSources = [{ x: -38, z: 38, y: 15 }, ...world.obstacles.filter((o) => o.type === "tank").map((o) => ({ x: o.x, z: o.z, y: 3.9 }))];
-    let steamTimer = 0;
-
-    function updateSteam(dt) {
-        steamTimer -= dt;
-        if (steamTimer > 0) return;
-        steamTimer = 0.32 / Math.max(0.3, post.getQualityConfig().particleDensity ?? 1);
-        for (const source of steamSources) {
-            if (distanceSq(state.player.x, state.player.z, source.x, source.z) > 70 * 70) continue;
-            effects.spawnSmoke(source.x, source.z, { y: source.y, color: "#dfe4ea", alpha: 0.22, size: source.y > 8 ? 3.2 : 1.6, grow: 2.4, life: 2.2, rise: source.y > 8 ? 2.2 : 1.1 });
-        }
-    }
-
-    function updateWorldVisuals(dt) {
-        updateSteam(dt);
-        const targetDay = state.time.phase === "night" ? 0 : 1;
-        const day = state.time.daylight ?? targetDay;
-        const step = dt / 9;
-        state.time.daylight = day < targetDay ? Math.min(targetDay, day + step) : Math.max(targetDay, day - step);
-
-        const mode = state.weather.mode;
-        const wetTarget = mode === "rain" || mode === "storm" ? 1 : mode === "fog" ? 0.35 : 0;
-        const wet = state.weather.wetness ?? wetTarget;
-        state.weather.wetness = wet < wetTarget ? Math.min(wetTarget, wet + dt * 0.12) : Math.max(wetTarget, wet - dt * 0.05);
-
-        if (mode === "storm") {
-            lightningTimer -= dt;
-            if (lightningTimer <= 0) {
-                post.flashLightning(1);
-                audio?.thunder(0.3 + Math.random() * 0.9);
-                secondFlash = 0.16 + Math.random() * 0.12;
-                lightningTimer = 3 + Math.random() * 7;
-            }
-        }
-        if (secondFlash > 0) {
-            secondFlash -= dt;
-            if (secondFlash <= 0) post.flashLightning(0.7);
-        }
-
-        applyWeatherVisuals();
-        world.updateVisuals(dt, 1 - state.time.daylight, state.weather.wetness);
-    }
-
     const policeGlow = [0, 1].map(() => {
         const light = new THREE.PointLight("#ff2040", 0, 18, 2);
         scene.add(light);
@@ -3785,6 +3431,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         setPaint: setPaintById,
         resetProfile,
         // Dev-only handles for in-browser checks.
-        debug: import.meta.env?.DEV ? { startRace, tags } : null,
+        debug: import.meta.env?.DEV ? { startRace: raceSystem.start, tags: tagSystem.tags } : null,
     };
 }
