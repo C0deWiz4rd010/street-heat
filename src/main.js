@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { createAudioDirector } from "./audio.js";
 import { markShared } from "./effects.js";
 import { createInput } from "./input.js";
+import { createRenderPipeline } from "./render.js";
 import { createInitialState } from "./state.js";
 import { createGameRuntime } from "./systems.js";
 import { mountHud } from "./ui.js";
@@ -22,8 +23,6 @@ const camera = new THREE.PerspectiveCamera(56, window.innerWidth / window.innerH
 camera.position.set(0, 26, 10);
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
-renderer.setSize(window.innerWidth, window.innerHeight);
 renderer.shadowMap.enabled = true;
 renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -38,13 +37,6 @@ scene.add(ambient);
 const sun = new THREE.DirectionalLight("#fff7df", 4.8);
 sun.position.set(45, 58, -32);
 sun.castShadow = true;
-sun.shadow.mapSize.set(2048, 2048);
-sun.shadow.camera.left = -82;
-sun.shadow.camera.right = 82;
-sun.shadow.camera.top = 82;
-sun.shadow.camera.bottom = -82;
-sun.shadow.camera.near = 0.5;
-sun.shadow.camera.far = 175;
 sun.shadow.bias = -0.00035;
 scene.add(sun);
 
@@ -73,7 +65,8 @@ markShared(...Object.values(sharedMaterials));
 
 const world = createWorld(scene, sharedMaterials);
 const lights = { ambient, sun, nightGlow };
-const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights });
+const post = createRenderPipeline({ renderer, scene, camera, sun });
+const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights, post });
 const input = createInput({
     onRestart: () => {
         if (state.screen === "playing" || state.screen === "gameover") runtime.reset();
@@ -116,7 +109,7 @@ function animate() {
 }
 
 window.addEventListener("resize", () => {
-    renderer.setSize(window.innerWidth, window.innerHeight);
+    post.resize();
     camera.aspect = window.innerWidth / window.innerHeight;
     camera.updateProjectionMatrix();
 });

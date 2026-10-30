@@ -39,7 +39,7 @@ const DISTRICT_MISSION_POINTS = {
     ],
 };
 
-export function createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights }) {
+export function createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights, post }) {
     const pickups = [];
     const police = [];
     const traffic = [];
@@ -228,6 +228,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         lights.nightGlow.position.set(state.player.x, 22, state.player.z);
         if (state.statusTimer > 0) state.statusTimer = Math.max(0, state.statusTimer - realDt);
         if (input.consume("f3")) state.debug.enabled = !state.debug.enabled;
+        if (input.consume("f4")) {
+            post.cycleQuality();
+            setStatus(`Grafik: ${post.getQualityConfig().label}`, 1.6);
+        }
         if (input.consume("g")) toggleGarage();
         if (state.running && input.consume("p")) {
             state.paused = !state.paused;
@@ -245,7 +249,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             updateCamera(realDt);
             audio?.update(state, realDt);
             renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
-            renderer.render(scene, camera);
+            post.render(realDt, state.player);
             return;
         }
 
@@ -263,7 +267,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateCamera(realDt);
         audio?.update(state, realDt);
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
-        renderer.render(scene, camera);
+        post.render(realDt, state.player);
     }
 
     function switchCar(index) {
@@ -2993,6 +2997,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const color = new THREE.Color(weather.color);
         if (state.time.phase === "night") color.lerp(new THREE.Color("#071018"), 0.38);
         scene.background = color;
+        post.setAtmosphere(color, state.time.phase, state.weather.mode);
         if (scene.fog) {
             scene.fog.color.copy(color);
             const fogNear = state.weather.mode === "fog" ? 20 : state.weather.mode === "storm" ? 28 : 48;

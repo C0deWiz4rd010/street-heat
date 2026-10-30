@@ -11,7 +11,7 @@ export function createInput({ onRestart, onSwitchCar, onUserGesture }) {
         keys[key] = true;
         onUserGesture?.();
 
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "F3"].includes(event.key)) {
+        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "F3", "F4"].includes(event.key)) {
             event.preventDefault();
         }
 
