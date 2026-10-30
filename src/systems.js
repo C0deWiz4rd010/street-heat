@@ -1,13 +1,13 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, DISTRICT_CONTRACTS, POLICE_UNITS, RACE, REPUTATION_GAINS, REPUTATION_TIERS, TAGS_PER_DISTRICT, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, DISTRICT_CONTRACTS, PAINTS, POLICE_UNITS, RACE, REPUTATION_GAINS, REPUTATION_TIERS, TAGS_PER_DISTRICT, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
 import { generateTags, reputationTier } from "./progression.js";
 import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
-import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } from "./physics/vehicle.js";
+import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createEffects, disposeObject, markShared } from "./effects.js";
-import { applyTuning, createCar, createMaterial, replaceCarModel, updateCarVisuals } from "./vehicles.js";
+import { applyTuning, createCar, createMaterial, replaceCarModel, setHeadlightBeamLevel, setPaint, updateCarVisuals } from "./vehicles.js";
 import { buildingsNear, insideBuilding, obstacleAt, obstaclesNear, pushOutBuildings, snapStreet } from "./world.js";
 
 const MISSION_DISTRICT_ORDER = ["downtown", "industrial", "park", "harbor"];
@@ -154,7 +154,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.actionPrompt = "";
         state.cameraShake = 0;
         state.worldEvent.active = false;
-        state.worldEvent.label = "Ruhige Strassen";
+        state.worldEvent.label = "Ruhige Straßen";
         state.worldEvent.timer = 14;
         state.worldEvent.x = 0;
         state.worldEvent.z = 0;
@@ -169,7 +169,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.district = getDistrictAt(0, 0);
         scannerCharge = 0;
         activeScannerZoneId = null;
-        setStatus(options.showMenu ? "Waehle einen Run oder pruefe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
+        setStatus(options.showMenu ? "Wähle einen Run oder prüfe die Garage." : "Direkt im Spiel. Fahre los.", 2.8);
         hideGameOver(ui);
         clearMissionBoss();
 
@@ -276,7 +276,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         if (state.running && input.consume("p")) {
             state.paused = !state.paused;
-            setStatus(state.paused ? "Pause." : "Zurueck auf der Strasse.", 1.4);
+            setStatus(state.paused ? "Pause." : "Zurück auf der Straße.", 1.4);
         }
         // Phase 6.1: Provoke key (Q) — handled outside physics step so it triggers once per real frame
         if (input.consume("q")) tryProvoke();
@@ -403,12 +403,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         player.surface = surface.id;
         const nitroMax = getNitroMax();
         const keys = input.keys;
-        const forward = keys.w || keys.arrowup ? 1 : 0;
-        const reverse = keys.s || keys.arrowdown ? 1 : 0;
+        const stick = input.analog ?? { x: 0, y: 0 };
+        const forward = keys.w || keys.arrowup || stick.y < -0.3 ? 1 : 0;
+        const reverse = keys.s || keys.arrowdown || stick.y > 0.3 ? 1 : 0;
         const left = keys.a || keys.arrowleft ? 1 : 0;
         const right = keys.d || keys.arrowright ? 1 : 0;
         const handbrake = Boolean(keys[" "]);
-        const turnInput = left - right;
+        // The analog stick steers proportionally; keys stay all-or-nothing.
+        const turnInput = Math.abs(stick.x) > 0.12 ? clamp(-stick.x, -1, 1) : left - right;
         state.lastTurnInput = turnInput;
         const ctl = { forward: forward === 1, reverse: reverse === 1, handbrake, turn: turnInput };
 
@@ -554,29 +556,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const dispLen = Math.sqrt(dispX * dispX + dispZ * dispZ);
             const speedRatioWall = Math.min(1, impactMag / Math.max(0.1, boostedMax));
             if (dispLen > 0.001) {
-                const wallNx = dispX / dispLen;
-                const wallNz = dispZ / dispLen;
-                const velDotN = player.vx * wallNx + player.vz * wallNz;
-                if (velDotN < 0) {
-                    // Phase 3.1: dynamic restitution, project normal component, exp tangential friction
-                    const restitution = clamp(0.10 + mass * 0.05 + speedRatioWall * 0.10, 0.10, 0.35);
-                    // Glancing hit (small normal component): pure project (slide).
-                    // Hard hit (larger normal component): add bounce.
-                    const glancingFactor = Math.min(1, Math.abs(velDotN) / Math.max(0.1, impactMag));
-                    const effectiveRestitution = restitution * glancingFactor;
-                    player.vx -= (1 + effectiveRestitution) * velDotN * wallNx;
-                    player.vz -= (1 + effectiveRestitution) * velDotN * wallNz;
-                    // Soft tangential friction so sliding bleeds slowly
-                    const tangentialDecay = Math.exp(-0.6 * dt);
-                    player.vx *= tangentialDecay;
-                    player.vz *= tangentialDecay;
-                    // Phase 7.1: wall-slide signal for audio
-                    state.wallSlide = Math.max(state.wallSlide ?? 0, Math.min(1, Math.abs(impactMag - Math.abs(velDotN)) * 0.18));
-                }
+                const slide = glancingWallImpact(player, dispX / dispLen, dispZ / dispLen, impactMag, speedRatioWall, mass, dt);
+                state.wallSlide = Math.max(state.wallSlide ?? 0, slide);
             } else {
-                const dampFactor = Math.min(0.50, 0.22 + mass * 0.18);
-                player.vx *= dampFactor;
-                player.vz *= dampFactor;
+                headOnDamp(player, mass);
             }
             player.speed = newFwdX * player.vx + newFwdZ * player.vz;
             player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
@@ -672,7 +655,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 state.mission.routeIndex += 1;
                 state.mission.to = state.mission.route[state.mission.routeIndex] ?? target;
                 addScore(120 + state.mission.stage * 10);
-                setStatus(target ? `${target.name} passiert. Naechster Marker aktualisiert.` : "Checkpoint passiert.", 1.6);
+                setStatus(target ? `${target.name} passiert. Nächster Marker aktualisiert.` : "Checkpoint passiert.", 1.6);
                 if (state.mission.progress >= state.mission.target) completeMission();
             }
         }
@@ -778,7 +761,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (pickup.districtId === state.mission.districtId) {
                 state.mission.progress += 1;
             } else {
-                setStatus(`${info.label} gesichert, aber der Auftrag laeuft in ${state.mission.districtName}.`, 1.2);
+                setStatus(`${info.label} gesichert, aber der Auftrag läuft in ${state.mission.districtName}.`, 1.2);
             }
             if (state.mission.progress >= state.mission.target) completeMission();
         }
@@ -1019,6 +1002,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         let rightFlank = 0;
         let tailers = 0;
         let pits = 0;
+        let pincers = 0;
         for (const agent of police) {
             const id = agent.id ?? (agent.id = `cop-${Math.random().toString(36).slice(2, 8)}`);
             if (agent.unitType === "motorcycle") {
@@ -1036,6 +1020,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             } else if (state.wanted.level >= 3 && pits < 1) {
                 assignments[id] = "pit";
                 pits += 1;
+            } else if (state.wanted.level >= 3 && pincers < 2) {
+                // Two cars cut in from opposite sides at the next crossing ahead of the player.
+                assignments[id] = "pincer";
+                agent.pincerSide = pincers % 2 === 0 ? -1 : 1;
+                pincers += 1;
             } else {
                 assignments[id] = tailers < 2 ? "tail" : "ram";
                 tailers += 1;
@@ -1174,6 +1163,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             }
             let targetX = baseTargetX + playerVxNorm * aheadOffset + playerSideX * flank;
             let targetZ = baseTargetZ + playerVzNorm * aheadOffset + playerSideZ * flank;
+            if (role === "pincer" && agent.state === "chase" && dist > 14) {
+                const crossing = nearestNode(roadGraph, state.player.x + playerVxNorm * 22, state.player.z + playerVzNorm * 22);
+                targetX = crossing.x + playerSideX * (agent.pincerSide ?? 1) * 6;
+                targetZ = crossing.z + playerSideZ * (agent.pincerSide ?? 1) * 6;
+            }
             if (agent.state === "leave") {
                 targetX = agent.x + (agent.x - state.player.x);
                 targetZ = agent.z + (agent.z - state.player.z);
@@ -1453,7 +1447,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     damagePlayer((hazard.damage ?? 2.2) + Math.abs(state.player.speed) * 0.1, "hazard");
                     applySpeedFactor(state.player, hazard.slowdown ?? 0.62);
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
-                    setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
+                    setStatus(hazard.message ?? "Trümmerfeld bremst dich aus.", 1.2);
                     if (hazard.consumeOnHit !== false) {
                         removeMesh(hazard.mesh);
                         hazards.splice(index, 1);
@@ -1538,7 +1532,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const missionUsesSafehouse = missionTurnInTarget && distanceSq(missionTurnInTarget.x, missionTurnInTarget.z, safehouse.x, safehouse.z) < 1;
 
         if (nearGarage) {
-            state.actionPrompt = "E Garage oeffnen";
+            state.actionPrompt = "E Garage öffnen";
             if (input.consume("e")) openGarage();
         }
 
@@ -1548,12 +1542,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 state.player.health = Math.min(getMaxHealth(), state.player.health + 18);
                 state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 20);
                 state.garageCooldown = 3.5;
-                setStatus("Garage: Reparatur und Nitro aufgefuellt.", 2);
+                setStatus("Garage: Reparatur und Nitro aufgefüllt.", 2);
             }
         }
         if (nearSafehouse && state.wanted.level > 0 && !missionUsesSafehouse) {
             state.actionPrompt = state.safehouseCooldown > 0
-                ? "E Safehouse: Kontakt fuer $120 bestechen"
+                ? "E Safehouse: Kontakt für $120 bestechen"
                 : "Safehouse: Heat-Kontakt aktiv";
             if (input.consume("e")) {
                 if (spendCash(120)) {
@@ -1562,7 +1556,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     setStatus("Safehouse: Heat reduziert.", 2);
                     audio?.upgrade();
                 } else {
-                    setStatus("Nicht genug Cash fuer den Safehouse-Kontakt.", 1.6);
+                    setStatus("Nicht genug Cash für den Safehouse-Kontakt.", 1.6);
                     audio?.denied();
                 }
             } else if (state.safehouseCooldown <= 0) {
@@ -1589,7 +1583,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const inZone = dist < CONFIG.map.poiRadius;
         if (inZone) {
             const nextHot = state.mission.riskLevel < state.mission.maxRiskLevel
-                ? ` | Weiterziehen fuer x${(state.mission.cashoutMultiplier + 0.35).toFixed(2)}`
+                ? ` | Weiterziehen für x${(state.mission.cashoutMultiplier + 0.35).toFixed(2)}`
                 : "";
             state.actionPrompt = `E Auftrag abgeben${nextHot}`;
             if (input.consume("e")) {
@@ -1818,7 +1812,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         applyWeatherVisuals();
         setStatus(
             nextPhase === "night"
-                ? "Nacht faellt ein. Mehr Neon, mehr Suchlichter, hoehere Event-Auszahlungen."
+                ? "Nacht fällt ein. Mehr Neon, mehr Suchlichter, höhere Event-Auszahlungen."
                 : "Morgengrauen. Sicht wird stabiler und die Stadt beruhigt sich etwas.",
             2.8
         );
@@ -1841,7 +1835,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (state.weather.mode === "rain" || state.weather.mode === "storm") {
             // 180 (rain) / 300 (storm) drops per second, independent of the step size
             const rainRate = state.weather.mode === "storm" ? 300 : 180;
-            const rainBursts = Math.floor(rainRate * dt + Math.random());
+            const rainBursts = Math.floor(rainRate * (post.getQualityConfig().particleDensity ?? 1) * dt + Math.random());
             for (let i = 0; i < rainBursts; i += 1) {
                 effects.spawnRain(
                     state.player.x + (Math.random() - 0.5) * 54,
@@ -2159,7 +2153,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         eventPickups.splice(index, 1);
         state.worldEvent.active = false;
-        state.worldEvent.label = "Ruhige Strassen";
+        state.worldEvent.label = "Ruhige Straßen";
         state.worldEvent.timer = 18 + Math.random() * 28;
     }
 
@@ -2461,7 +2455,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         activeScannerZoneId = null;
         state.cameraShake = Math.max(state.cameraShake, 0.36);
         spawnParticle(x, z, "#f7fbff", 42);
-        setStatus(`EMP gezuendet. ${disabled} Einheiten deaktiviert.`, 2);
+        setStatus(`EMP gezündet. ${disabled} Einheiten deaktiviert.`, 2);
     }
 
     function addSkidMark() {
@@ -2502,8 +2496,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function spawnParticle(x, z, color, count) {
-        effects.spawnDebris(x, z, color, count);
-        if (count >= 14) effects.spawnSparks(x, z, Math.round(count * 1.4));
+        const density = post.getQualityConfig().particleDensity ?? 1;
+        const scaled = Math.max(1, Math.round(count * density));
+        effects.spawnDebris(x, z, color, scaled);
+        if (count >= 14) effects.spawnSparks(x, z, Math.round(count * 1.4 * density));
     }
 
     function updateParticles(dt) {
@@ -2633,7 +2629,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             return;
         }
         if (state.wanted.level >= 5) {
-            setStatus("Heat maximal — Provoke nicht moeglich.", 1.2);
+            setStatus("Heat maximal — Provoke nicht möglich.", 1.2);
             return;
         }
         updateWanted(state.wanted.level + 1);
@@ -2641,7 +2637,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.provoke.active = 20;
         state.provoke.fxTimer = 0.4;
         spawnPopup("PROVOKE", "drift");
-        setStatus("Provoziert. Heat +1, Multiplikator +0.5 fuer 20s, Cash x1.5.", 2.2);
+        setStatus("Provoziert. Heat +1, Multiplikator +0.5 für 20s, Cash x1.5.", 2.2);
     }
 
     function spendCash(amount) {
@@ -2748,7 +2744,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         const cost = getUpgradeCost(id);
         if (!spendCash(cost)) {
-            setStatus(`Garage: $${cost} benoetigt fuer ${UPGRADES[id].label}.`, 1.8);
+            setStatus(`Garage: $${cost} benötigt für ${UPGRADES[id].label}.`, 1.8);
             audio?.denied();
             return;
         }
@@ -2807,6 +2803,19 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         else openGarage();
     }
 
+    function setPaintById(id) {
+        const paint = PAINTS.find((entry) => entry.id === id);
+        if (!paint) return;
+        if (paint.unlock && !state.unlocks.includes(paint.unlock)) {
+            setStatus(`${paint.label}: noch gesperrt (${paint.unlock}).`, 1.8);
+            audio?.denied?.();
+            return;
+        }
+        state.paint = paint.id;
+        persistProfile();
+        setStatus(`Lackierung: ${paint.label}.`, 1.4);
+    }
+
     function resetProfile() {
         clearProfile();
         const fresh = createDefaultProfile(CAR_MODELS, UPGRADES);
@@ -2814,12 +2823,20 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.bestScore = 0;
         state.unlockedCars = [...fresh.unlockedCars];
         state.achievements = [];
+        state.reputation = { ...fresh.reputation };
+        state.tags = [];
+        state.unlocks = [];
+        state.paint = "default";
+        for (const tag of world.tags ?? []) {
+            tag.collected = false;
+            tag.mesh.visible = true;
+        }
         state.lifetime = { ...fresh.lifetime };
         state.upgrades = { ...fresh.upgrades };
         state.playerModelIndex = 0;
         state.profile = fresh;
         replaceCarModel(playerCar, CAR_MODELS[0], sharedMaterials);
-        setStatus("Profil geloescht. Neustart bereit.", 2);
+        setStatus("Profil gelöscht. Neustart bereit.", 2);
         openMenu();
     }
 
@@ -2846,6 +2863,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             reputation: { ...state.reputation },
             tags: [...state.tags],
             unlocks: [...state.unlocks],
+            paint: state.paint,
             contract: { id: state.contract.id, progress: state.contract.progress, claimed: state.contract.claimed },
             lifetime: { ...state.lifetime },
         };
@@ -2978,7 +2996,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateWanted(Math.min(5, state.wanted.level + 1));
         const nextTarget = chooseHotDropTarget(state.mission.districtId, state.mission.to);
         if (nextTarget) state.mission.to = nextTarget;
-        setStatus(`Hot Drop verlaengert. Multiplikator x${state.mission.cashoutMultiplier.toFixed(2)}. Heat steigt.`, 2.2);
+        setStatus(`Hot Drop verlängert. Multiplikator x${state.mission.cashoutMultiplier.toFixed(2)}. Heat steigt.`, 2.2);
         audio?.upgrade();
     }
 
@@ -3187,7 +3205,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (obstacle.type === "harborCrate") return `Hafenkisten aufgebrochen. +${reward} Score.`;
         if (obstacle.type === "fence") return `Zaun durchbrochen. +${reward} Score.`;
         if (obstacle.type === "lamp") return `Laterne umgefahren. +${reward} Score.`;
-        if (obstacle.type === "dumpster") return `Muellcontainer weggeschoben. +${reward} Score.`;
+        if (obstacle.type === "dumpster") return `Müllcontainer weggeschoben. +${reward} Score.`;
         if (obstacle.type === "constructionBeacon") return `Baustellenbake zerlegt. +${reward} Score.`;
         return `${obstacle.label ?? "Prop"} zerlegt. +${reward} Score.`;
     }
@@ -3230,7 +3248,22 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     /** Per-frame: ease day/night and wetness, run storm lightning, animate the world. */
+    // Industrial steam: smokestack and tank vents puff while the player is nearby.
+    const steamSources = [{ x: -38, z: 38, y: 15 }, ...world.obstacles.filter((o) => o.type === "tank").map((o) => ({ x: o.x, z: o.z, y: 3.9 }))];
+    let steamTimer = 0;
+
+    function updateSteam(dt) {
+        steamTimer -= dt;
+        if (steamTimer > 0) return;
+        steamTimer = 0.32 / Math.max(0.3, post.getQualityConfig().particleDensity ?? 1);
+        for (const source of steamSources) {
+            if (distanceSq(state.player.x, state.player.z, source.x, source.z) > 70 * 70) continue;
+            effects.spawnSmoke(source.x, source.z, { y: source.y, color: "#dfe4ea", alpha: 0.22, size: source.y > 8 ? 3.2 : 1.6, grow: 2.4, life: 2.2, rise: source.y > 8 ? 2.2 : 1.1 });
+        }
+    }
+
     function updateWorldVisuals(dt) {
+        updateSteam(dt);
         const targetDay = state.time.phase === "night" ? 0 : 1;
         const day = state.time.daylight ?? targetDay;
         const step = dt / 9;
@@ -3315,7 +3348,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function updateVehicleVisuals(dt) {
         const player = state.player;
         const night = 1 - (state.time.daylight ?? 1);
-        applyTuning(playerCar, state.upgrades);
+        applyTuning(playerCar, { ...state.upgrades, neon: state.unlocks.includes("Kosmetik Unterboden-Neon") });
+        const paint = PAINTS.find((entry) => entry.id === state.paint && (!entry.unlock || state.unlocks.includes(entry.unlock))) ?? PAINTS[0];
+        if (playerCar.userData.parts.paintKey !== paint.id) {
+            playerCar.userData.parts.paintKey = paint.id;
+            setPaint(playerCar, paint.color, paint.chrome);
+        }
+        setHeadlightBeamLevel(Math.min(1, night + (state.weather.mode === "fog" ? 0.5 : 0)));
         updateCarVisuals(playerCar, dt, {
             speed: player.speed,
             steer: state.lastTurnInput ?? 0,
@@ -3622,7 +3661,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (state.wanted.level > 0) {
                 scrambleNearbyPolice(obstacle.x, obstacle.z, 26);
                 state.wanted.decay += 1.4;
-                setStatus("Zaun durchbrochen. Sichtlinie kurz gestoert.", 1.4);
+                setStatus("Zaun durchbrochen. Sichtlinie kurz gestört.", 1.4);
             }
             return;
         }
@@ -3715,7 +3754,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             color: "#c2d2da",
             damage: 1.5,
             slowdown: 0.82,
-            message: "Zaunreste schlittern ueber den Asphalt.",
+            message: "Zaunreste schlittern über den Asphalt.",
         });
     }
 
@@ -3760,6 +3799,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         closeGarage,
         buyUpgrade,
         buyOrSelectCar,
+        setPaint: setPaintById,
         resetProfile,
         // Dev-only handles for in-browser checks.
         debug: import.meta.env?.DEV ? { startRace, tags } : null,

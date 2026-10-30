@@ -13,6 +13,7 @@ export function createDefaultProfile(carModels, upgrades) {
         reputation: { downtown: 0, industrial: 0, park: 0, harbor: 0 },
         tags: [],
         unlocks: [],
+        paint: "default",
         contract: null,
         lifetime: {
             missions: 0,
@@ -54,6 +55,7 @@ export function loadProfile(carModels, upgrades) {
                 ...Object.fromEntries(Object.entries(parsed.reputation ?? {}).map(([key, value]) => [key, Math.max(0, Number(value) || 0)])),
             },
             tags: Array.isArray(parsed.tags) ? parsed.tags.filter((id) => typeof id === "string") : [],
+            paint: typeof parsed.paint === "string" ? parsed.paint : "default",
             unlocks: Array.isArray(parsed.unlocks) ? parsed.unlocks.filter((id) => typeof id === "string") : [],
             contract: parsed.contract && typeof parsed.contract.id === "string"
                 ? { id: parsed.contract.id, progress: Number(parsed.contract.progress) || 0, claimed: Boolean(parsed.contract.claimed) }

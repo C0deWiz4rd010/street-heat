@@ -23,6 +23,48 @@ export function addBox(group, size, position, material, cast = true, receive = t
 
 const geometryCache = new Map();
 
+let beamMaterial = null;
+function getBeamMaterial() {
+    if (!beamMaterial) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 32;
+        canvas.height = 64;
+        const ctx = canvas.getContext("2d");
+        const gradient = ctx.createLinearGradient(0, 0, 0, 64);
+        gradient.addColorStop(0, "rgba(255,244,200,0.9)");
+        gradient.addColorStop(1, "rgba(255,244,200,0)");
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, 32, 64);
+        beamMaterial = new THREE.MeshBasicMaterial({
+            map: new THREE.CanvasTexture(canvas),
+            transparent: true,
+            opacity: 0,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending,
+        });
+        beamMaterial.userData.shared = true;
+    }
+    return beamMaterial;
+}
+
+function getBeamGeometry(width, length) {
+    return cached(`beam:${width}`, () => new THREE.PlaneGeometry(width * 0.95, 7).rotateX(-Math.PI / 2).rotateY(Math.PI));
+}
+
+/** 0 = day, 1 = full night: how visible the NPC headlight decals are. */
+export function setHeadlightBeamLevel(level) {
+    if (beamMaterial) beamMaterial.opacity = Math.max(0, Math.min(1, level)) * 0.55;
+}
+
+export function setPaint(car, color, chrome = false) {
+    const parts = car.userData.parts;
+    const model = car.userData.model;
+    if (!parts?.bodyMat || !model) return;
+    parts.bodyMat.color.set(color ?? model.color);
+    parts.bodyMat.metalness = chrome ? 0.95 : 0.36;
+    parts.bodyMat.roughness = chrome ? 0.12 : 0.24;
+}
+
 function cached(key, build) {
     let entry = geometryCache.get(key);
     if (!entry) {
@@ -176,7 +218,7 @@ export function createCar(model, sharedMaterials, options = {}) {
         wheels.push({ pivot, spin, front });
     }
 
-    const parts = { chassis, wheels, tailMat, headlightMat, wheelRadius: 0.42, tune: null, tuneKey: null, siren: null, spot: null };
+    const parts = { bodyMat, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: 0.42, tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
         const barY = H / 2 + roofShape.height + 0.12;
@@ -201,6 +243,15 @@ export function createCar(model, sharedMaterials, options = {}) {
         parts.spot = spot;
     }
 
+    if (!options.headlightSpot) {
+        // NPC cars light the road ahead with a soft additive decal instead of a real light.
+        const beam = new THREE.Mesh(getBeamGeometry(W, L), getBeamMaterial());
+        beam.position.set(0, -0.3, L / 2 + 3.6);
+        beam.renderOrder = 1;
+        group.add(beam);
+        parts.beam = beam;
+    }
+
     group.userData.model = model;
     group.userData.parts = parts;
     group.userData.vis = { steer: 0, roll: 0, pitch: 0, prevSpeed: 0, accel: 0 };
@@ -212,7 +263,7 @@ export function applyTuning(car, upgrades = {}) {
     const parts = car.userData.parts;
     const model = car.userData.model;
     if (!parts || !model) return;
-    const key = `${model.id ?? model.name}:${upgrades.engine ?? 0}:${upgrades.grip ?? 0}:${upgrades.nitro ?? 0}:${upgrades.armor ?? 0}`;
+    const key = `${model.id ?? model.name}:${upgrades.engine ?? 0}:${upgrades.grip ?? 0}:${upgrades.nitro ?? 0}:${upgrades.armor ?? 0}:${upgrades.neon ? 1 : 0}`;
     if (parts.tuneKey === key) return;
     parts.tuneKey = key;
     if (parts.tune) {
@@ -237,7 +288,7 @@ export function applyTuning(car, upgrades = {}) {
     if ((upgrades.engine ?? 0) >= 3) {
         addBox(tune, { x: W * 0.3, y: 0.14, z: L * 0.2 }, { x: 0, y: H / 2 + 0.07, z: L * 0.24 }, dark);
     }
-    if ((upgrades.nitro ?? 0) >= 1) {
+    if ((upgrades.nitro ?? 0) >= 1 || upgrades.neon) {
         const glow = new THREE.Mesh(
             new THREE.PlaneGeometry(W * 0.95, L * 0.85).rotateX(-Math.PI / 2),
             new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 1.6, 2.4), transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending })

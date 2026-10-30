@@ -75,6 +75,16 @@ export const REPUTATION_TIERS = [
     { name: "Bezirkskönig", at: 1400, cashBonus: 0.2, unlock: "Kosmetik Unterboden-Neon" },
 ];
 
+// Paint jobs for the player car. `unlock` names an entry in profile.unlocks (reputation rewards).
+export const PAINTS = [
+    { id: "default", label: "Original", color: null, unlock: null },
+    { id: "white", label: "Weiß", color: "#e9edf2", unlock: null },
+    { id: "black", label: "Schwarz", color: "#14171c", unlock: null },
+    { id: "blue", label: "Blau", color: "#2f6fd6", unlock: null },
+    { id: "pink", label: "Neon-Pink", color: "#ff3fa4", unlock: "Lackfarbe Neon-Pink" },
+    { id: "chrome", label: "Chrom", color: "#c9d2dc", unlock: "Lackfarbe Chrom", chrome: true },
+];
+
 export const REPUTATION_GAINS = { mission: 40, boss: 100, event: 15, tag: 10, tagSet: 80 };
 export const TAGS_PER_DISTRICT = 10;
 
@@ -169,7 +179,7 @@ export const DISTRICTS = [
         x: 1,
         z: -1,
         color: "#78c86c",
-        bonus: "Nitro und Abkuerzungen",
+        bonus: "Nitro und Abkürzungen",
         traffic: 0.45,
         cashMultiplier: 1,
         healMultiplier: 1,
@@ -244,7 +254,7 @@ export const WORLD_EVENTS = [
     { id: "cashDrop", label: "Cash Drop", color: "#ffc64d", score: 500, cash: 260, heat: 1, kind: "pickup" },
     { id: "partsCache", label: "Teilelager", color: "#c9a5ff", score: 380, cash: 120, heal: 24, heat: 0, kind: "pickup" },
     { id: "hotVan", label: "Geldtransporter", color: "#ff6a4f", score: 760, cash: 420, heat: 2, kind: "convoy", speed: 5.4 },
-    { id: "roadClosure", label: "Strassensperrung", color: "#ff9c45", score: 560, cash: 280, heat: 2, kind: "closure" },
+    { id: "roadClosure", label: "Straßensperrung", color: "#ff9c45", score: 560, cash: 280, heat: 2, kind: "closure" },
     { id: "vipConvoy", label: "VIP-Konvoi", color: "#7fd6ff", score: 920, cash: 520, heat: 3, kind: "convoy", speed: 6.2 },
     { id: "streetRace", label: "Illegales Rennen", color: "#79ffb3", score: 700, cash: 340, heat: 2, kind: "race", speed: 8.1 },
     { id: "hiddenCache", label: "Versteckte Teilekiste", color: "#b988ff", score: 460, cash: 150, heal: 18, heat: 0, kind: "stash" },
@@ -254,7 +264,7 @@ export const CONTRACTS = [
     {
         id: "cleanRun",
         label: "Saubere Flucht",
-        description: "Schliesse 2 Missionen mit Heat 2 oder niedriger ab.",
+        description: "Schließe 2 Missionen mit Heat 2 oder niedriger ab.",
         metric: "missionsLowHeat",
         target: 2,
         reward: 420,
@@ -286,9 +296,9 @@ export const CONTRACTS = [
 ];
 
 export const ACHIEVEMENTS = [
-    { id: "firstMission", label: "Erster Auftrag", description: "Schliesse deine erste Mission ab.", metric: "lifetimeMissions", target: 1, reward: 250 },
+    { id: "firstMission", label: "Erster Auftrag", description: "Schließe deine erste Mission ab.", metric: "lifetimeMissions", target: 1, reward: 250 },
     { id: "collector", label: "Sammler", description: "Sammle 30 Pickups insgesamt.", metric: "lifetimePickups", target: 30, reward: 300 },
-    { id: "demolition", label: "Abrissbirne", description: "Zerstoere 25 Props insgesamt.", metric: "lifetimeProps", target: 25, reward: 360 },
+    { id: "demolition", label: "Abrissbirne", description: "Zerstöre 25 Props insgesamt.", metric: "lifetimeProps", target: 25, reward: 360 },
     { id: "highRoller", label: "High Roller", description: "Erreiche 10.000 Bestscore.", metric: "bestScore", target: 10000, reward: 600 },
     { id: "fullGarage", label: "Fuhrpark", description: "Schalte alle Autos frei.", metric: "unlockedCars", target: 4, reward: 900 },
 ];
@@ -310,7 +320,7 @@ export const UPGRADES = {
         label: "Nitro",
         max: 4,
         baseCost: 360,
-        effect: "Groesserer Tank und staerkerer Boost",
+        effect: "Größerer Tank und stärkerer Boost",
     },
     grip: {
         label: "Grip",
@@ -347,8 +357,8 @@ export const CAR_MODELS = [
     {
         id: "bulldog",
         name: "Bulldog",
-        description: "Schwerer Muscle-Wagen, prallt Polizei weg und haelt mehr aus.",
-        unlockCost: 900,
+        description: "Schwerer Muscle-Wagen, prallt Polizei weg und hält mehr aus.",
+        unlockCost: 9000,
         color: "#ffb13c",
         trim: "#252015",
         length: 4.9,
@@ -371,7 +381,7 @@ export const CAR_MODELS = [
         id: "needle",
         name: "Needle",
         description: "Sehr schnell und leicht — explosiv, aber empfindlich.",
-        unlockCost: 1400,
+        unlockCost: 14000,
         color: "#4fc3ff",
         trim: "#0f2330",
         length: 3.75,
@@ -393,8 +403,8 @@ export const CAR_MODELS = [
     {
         id: "mule",
         name: "Mule",
-        description: "Langsam, aber stabil — verzeiht Fehler und raeumt alles ab.",
-        unlockCost: 1100,
+        description: "Langsam, aber stabil — verzeiht Fehler und räumt alles ab.",
+        unlockCost: 11000,
         color: "#76d18f",
         trim: "#172116",
         length: 5.4,

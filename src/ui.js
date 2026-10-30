@@ -1,6 +1,13 @@
 import { reputationTier } from "./progression.js";
 import { REPUTATION_TIERS } from "./config.js";
-import { ACHIEVEMENTS, COMBO_TIERS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
+import { ACHIEVEMENTS, COMBO_TIERS, PAINTS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
+
+// Colours come from the CSS tokens (:root) so the HUD canvas and the stylesheet stay in sync.
+const palette = {};
+function tok(name, fallback) {
+    if (!palette[name]) palette[name] = getComputedStyle(document.documentElement).getPropertyValue(`--${name}`).trim() || fallback;
+    return palette[name];
+}
 
 export function mountHud(root) {
     root.innerHTML = `
@@ -84,7 +91,7 @@ export function mountHud(root) {
                         <div class="bar-track"><div class="bar-fill" id="heatFill"></div></div>
                     </div>
                     <div class="event-strip">
-                        <span id="eventLabel">Ruhige Strassen</span>
+                        <span id="eventLabel">Ruhige Straßen</span>
                         <strong id="eventTimer">--</strong>
                     </div>
                     <div class="contract-strip">
@@ -107,11 +114,8 @@ export function mountHud(root) {
         <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>Q Provoke (Heat +1, Multiplikator +0.5)<br>G Garage | C Kamera | Esc Pause | F3 Debug | F4 Grafik | R Neustart</div>
 
         <div id="touchControls" aria-label="Touch-Steuerung">
-            <div class="touch-pad">
-                <button data-key="w" aria-label="Beschleunigen">W</button>
-                <button data-key="a" aria-label="Links">A</button>
-                <button data-key="s" aria-label="Bremsen">S</button>
-                <button data-key="d" aria-label="Rechts">D</button>
+            <div id="stick" class="stick" role="application" aria-label="Lenk-Stick: nach oben Gas, nach unten Bremsen, seitlich Lenken">
+                <div id="stickKnob" class="stick-knob"></div>
             </div>
             <div class="touch-actions">
                 <button data-key="shift" aria-label="Nitro">N2O</button>
@@ -159,10 +163,11 @@ export function mountHud(root) {
                     <div class="label">Garage</div>
                     <h2>Fuhrpark & Upgrades</h2>
                 </div>
-                <button id="closeGarageBtn" aria-label="Garage schliessen">X</button>
+                <button id="closeGarageBtn" aria-label="Garage schließen">X</button>
             </div>
             <div class="garage-cash">Bank <strong id="garageCash">$0</strong></div>
             <div class="garage-grid" id="carList"></div>
+            <div class="paint-list" id="paintList" role="group" aria-label="Lackierung"></div>
             <div class="garage-upgrades" id="upgradeList"></div>
             <div class="achievement-list" id="achievementList"></div>
         </div>
@@ -311,6 +316,7 @@ export function mountHud(root) {
         closeGarageBtn: document.getElementById("closeGarageBtn"),
         garageCash: document.getElementById("garageCash"),
         carList: document.getElementById("carList"),
+        paintList: document.getElementById("paintList"),
         upgradeList: document.getElementById("upgradeList"),
         achievementList: document.getElementById("achievementList"),
         debugPanel: document.getElementById("debugPanel"),
@@ -529,7 +535,7 @@ function renderTacho(ui, state, carModel) {
         ? `hsl(${Math.round(16 - ratio * 16)},100%,60%)`
         : ratio > 0.5
             ? `hsl(${Math.round(48 - (ratio - 0.5) * 64)},100%,62%)`
-            : "#63c8ff";
+            : tok("blue", "#63c8ff");
     ctx.strokeStyle = arcColor;
     ctx.shadowBlur = ratio > 0.75 ? 14 : 0;
     ctx.shadowColor = arcColor;
@@ -551,8 +557,27 @@ function renderTacho(ui, state, carModel) {
         ctx.stroke();
     }
 
+    // Nitro ring (inner arc) and rev ring (outer arc, simulated five gears).
+    const nitroMax = CONFIG.player.nitroMax + state.upgrades.nitro * 18;
+    const nitroRatio = Math.max(0, Math.min(1, state.player.nitro / nitroMax));
+    ctx.lineWidth = 4;
+    ctx.strokeStyle = "rgba(255,255,255,0.1)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius - 15, startAngle, endAngle);
+    ctx.stroke();
+    ctx.strokeStyle = state.player.nitroActive ? tok("orange", "#ff9c45") : tok("purple", "#c9a5ff");
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius - 15, startAngle, startAngle + sweepAngle * nitroRatio);
+    ctx.stroke();
+    const rev = (ratio * 5) % 1;
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = rev > 0.85 ? tok("warn", "#ff3b3b") : "rgba(255,255,255,0.35)";
+    ctx.beginPath();
+    ctx.arc(cx, cy, radius + 6, startAngle, startAngle + sweepAngle * rev);
+    ctx.stroke();
+
     // Speed text
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = tok("ink-hard", "#ffffff");
     ctx.font = "900 20px 'Segoe UI', system-ui, sans-serif";
     ctx.textAlign = "center";
     ctx.textBaseline = "bottom";
@@ -571,7 +596,7 @@ function renderMissionHud(ui, state) {
     const bonusProgress = formatMissionBonus(mission);
     ui.missionTarget.textContent = target
         ? `Ziel: ${target.name} | ${Math.round(distanceTo(state.player, target))} m`
-        : "Ziel: offene Strassen";
+        : "Ziel: offene Straßen";
     ui.missionBonus.textContent = bonusProgress;
 
     if (mission.type === "pickup") {
@@ -631,7 +656,7 @@ function renderMissionHud(ui, state) {
 
     if (mission.type === "bossBlockade") {
         ui.missionTitle.textContent = mission.chainName;
-        ui.missionText.textContent = `${mission.description} Durchbrueche ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
+        ui.missionText.textContent = `${mission.description} Durchbrüche ${mission.progress}/${mission.target}. Zeit ${timer}s.`;
         ui.missionFill.style.width = `${clamp(mission.progress / Math.max(1, mission.target), 0, 1) * 100}%`;
         return;
     }
@@ -659,6 +684,7 @@ function renderEventHud(ui, state) {
 
 function renderContractHud(ui, state) {
     const contract = CONTRACTS.find((item) => item.id === state.contract.id) ?? CONTRACTS[0];
+    ui.contractLabel.parentElement.hidden = state.contract.claimed;
     ui.contractLabel.textContent = contract.label;
     ui.contractProgress.textContent = state.contract.claimed ? "Done" : `${state.contract.progress}/${contract.target}`;
     ui.menuContract.innerHTML = `
@@ -676,16 +702,25 @@ function renderProfileHud(ui, state) {
 }
 
 function renderGarageHud(ui, state) {
+    // Rebuilding the buttons every frame would drop keyboard focus, so only redraw on change.
+    const signature = JSON.stringify([Math.round(state.cash), state.unlockedCars, state.playerModelIndex, state.upgrades, state.paint, state.unlocks, state.achievements.length, state.screen === "garage"]);
+    if (ui._garageSignature === signature) return;
+    ui._garageSignature = signature;
+    ui.paintList.innerHTML = PAINTS.map((paint) => {
+        const locked = paint.unlock && !state.unlocks.includes(paint.unlock);
+        const active = state.paint === paint.id;
+        return `<button class="paint-swatch ${active ? "selected" : ""}" data-paint-id="${paint.id}" aria-pressed="${active}" ${locked ? `disabled title="Gesperrt: ${paint.unlock}"` : ""} style="--swatch:${paint.color ?? "#888"}">${paint.label}</button>`;
+    }).join("");
     ui.garageCash.textContent = `$${Math.round(state.cash).toLocaleString("de-DE")}`;
     ui.carList.innerHTML = CAR_MODELS.map((car, index) => {
         const unlocked = state.unlockedCars.includes(car.id);
         const selected = index === state.playerModelIndex;
-        const action = unlocked ? (selected ? "Aktiv" : "Waehlen") : `$${car.unlockCost}`;
+        const action = unlocked ? (selected ? "Aktiv" : "Wählen") : `$${car.unlockCost}`;
         const stats = [
-            { label: "Speed", value: car.maxSpeed / 24, color: "#63c8ff" },
-            { label: "Accel", value: car.acceleration / 32, color: "#57d68d" },
-            { label: "Turn", value: car.turn / 4.3, color: "#c9a5ff" },
-            { label: "Masse", value: 1 - (car.mass - 0.72) / 1.18, color: "#ffc64d" },
+            { label: "Speed", value: car.maxSpeed / 24, color: tok("blue", "#63c8ff") },
+            { label: "Accel", value: car.acceleration / 32, color: tok("green", "#57d68d") },
+            { label: "Turn", value: car.turn / 4.3, color: tok("purple", "#c9a5ff") },
+            { label: "Masse", value: 1 - (car.mass - 0.72) / 1.18, color: tok("gold", "#ffc64d") },
         ];
         const statHtml = stats.map(({ label, value, color }) =>
             `<div class="stat-bar-row">
@@ -767,7 +802,7 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
     const scale = Math.min(width, height) / (minimapRange * 2);
 
     ctx.clearRect(0, 0, width, height);
-    ctx.fillStyle = "#091017";
+    ctx.fillStyle = tok("map-bg", "#091017");
     ctx.fillRect(0, 0, width, height);
 
     // District quadrant tints
@@ -797,34 +832,34 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
 
     for (const zone of world.scannerZones ?? []) drawMapScannerZone(ctx, state, cx, cy, scale, width, height, zone);
     for (const poi of world.pointsOfInterest) drawMapDot(ctx, state, cx, cy, scale, width, height, poi.x, poi.z, poi.color, 4.5);
-    for (const car of traffic) drawMapDot(ctx, state, cx, cy, scale, width, height, car.x, car.z, "#e8e2ce", 2);
-    for (const agent of police) drawMapDot(ctx, state, cx, cy, scale, width, height, agent.x, agent.z, "#ff5a4c", 3);
-    for (const block of roadblocks) drawMapDot(ctx, state, cx, cy, scale, width, height, block.x, block.z, "#ff9c45", 3.5);
+    for (const car of traffic) drawMapDot(ctx, state, cx, cy, scale, width, height, car.x, car.z, tok("traffic", "#e8e2ce"), 2);
+    for (const agent of police) drawMapDot(ctx, state, cx, cy, scale, width, height, agent.x, agent.z, tok("red", "#ff5a4c"), 3);
+    for (const block of roadblocks) drawMapDot(ctx, state, cx, cy, scale, width, height, block.x, block.z, tok("orange", "#ff9c45"), 3.5);
     for (const event of eventPickups) drawMapRing(ctx, state, cx, cy, scale, width, height, event.x, event.z, event.color);
     for (const hazard of hazards) {
         if (hazard.warn > 0) drawMapWarning(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z);
-        else drawMapDot(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z, "#f7fbff", 2.5);
+        else drawMapDot(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z, tok("ice", "#f7fbff"), 2.5);
     }
     // Graffiti tags only show up when you are close.
     for (const tag of world.tags ?? []) {
         if (tag.collected) continue;
         if ((tag.x - state.player.x) ** 2 + (tag.z - state.player.z) ** 2 > 34 * 34) continue;
-        drawMapDiamond(ctx, state, cx, cy, scale, width, height, tag.x, tag.z, "#ff7ad9");
+        drawMapDiamond(ctx, state, cx, cy, scale, width, height, tag.x, tag.z, tok("pink", "#ff7ad9"));
     }
     if (state.race?.active) {
         const nextCheckpoint = state.race.checkpoints[state.race.player.index];
-        if (nextCheckpoint) drawMapRing(ctx, state, cx, cy, scale, width, height, nextCheckpoint.x, nextCheckpoint.z, "#79ffb3");
-        for (const racer of state.race.racers) drawMapDiamond(ctx, state, cx, cy, scale, width, height, racer.x, racer.z, "#79ffb3");
+        if (nextCheckpoint) drawMapRing(ctx, state, cx, cy, scale, width, height, nextCheckpoint.x, nextCheckpoint.z, tok("mint", "#79ffb3"));
+        for (const racer of state.race.racers) drawMapDiamond(ctx, state, cx, cy, scale, width, height, racer.x, racer.z, tok("mint", "#79ffb3"));
     }
-    if (helicopter?.visible) drawMapRing(ctx, state, cx, cy, scale, width, height, state.helicopter.x, state.helicopter.z, "#f7fbff");
+    if (helicopter?.visible) drawMapRing(ctx, state, cx, cy, scale, width, height, state.helicopter.x, state.helicopter.z, tok("ice", "#f7fbff"));
 
     const target = currentMissionTarget(state);
-    if (target) drawMapRing(ctx, state, cx, cy, scale, width, height, target.x, target.z, "#ffffff");
+    if (target) drawMapRing(ctx, state, cx, cy, scale, width, height, target.x, target.z, tok("ink-hard", "#ffffff"));
 
     ctx.save();
     ctx.translate(cx, cy);
     ctx.rotate(-state.player.rotation);
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = tok("ink-hard", "#ffffff");
     ctx.beginPath();
     ctx.moveTo(0, -8);
     ctx.lineTo(5, 6);
@@ -850,7 +885,7 @@ function drawMapWarning(ctx, state, cx, cy, scale, width, height, x, z) {
     const my = cy + (z - state.player.z) * scale;
     if (mx < -12 || mx > width + 12 || my < -12 || my > height + 12) return;
     const blink = Math.floor(performance.now() / 220) % 2 === 0;
-    ctx.fillStyle = blink ? "#ff3b3b" : "#ffd24d";
+    ctx.fillStyle = blink ? tok("warn", "#ff3b3b") : tok("warn-alt", "#ffd24d");
     ctx.beginPath();
     ctx.moveTo(mx, my - 7);
     ctx.lineTo(mx + 6, my + 5);
@@ -889,7 +924,7 @@ function drawMapScannerZone(ctx, state, cx, cy, scale, width, height, zone) {
     const my = cy + (zone.z - state.player.z) * scale;
     const radius = zone.radius * scale;
     if (mx < -radius || mx > width + radius || my < -radius || my > height + radius) return;
-    const color = zone.color ?? "#63c8ff";
+    const color = zone.color ?? tok("blue", "#63c8ff");
     ctx.strokeStyle = color.replace("#", "#");
     ctx.globalAlpha = 0.24;
     ctx.lineWidth = 1.5;

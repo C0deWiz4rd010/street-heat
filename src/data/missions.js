@@ -6,13 +6,13 @@ export const MISSION_CHAINS = {
         {
             type: "delivery",
             title: "Downtown Warm-up",
-            description: "Kurierfahrt durch die engen Straassenschluchten.",
+            description: "Kurierfahrt durch die engen Straßenschluchten.",
             target: 1,
             timer: { base: 50, perStage: 4 },
             from: { name: "Courier Hub", x: 18, z: 40 },
             to: { name: "Skyline Drop", x: 47, z: 19 },
             maxRiskLevel: 3,
-            bonus: { id: "quickFinish", label: "Tempo-Bonus", description: "Schliesse frueh ab.", target: 20, reward: 220 },
+            bonus: { id: "quickFinish", label: "Tempo-Bonus", description: "Schließe früh ab.", target: 20, reward: 220 },
         },
         {
             type: "checkpoint",
@@ -30,7 +30,7 @@ export const MISSION_CHAINS = {
             target: { base: 3, perStage: 1 },
             timer: { base: 40, perStage: 4 },
             minimumHeat: { base: 2, perStage: 1, cap: 2 },
-            bonus: { id: "highHeat", label: "Heisses Finale", description: "Mit Heat 3+ abschliessen.", target: 3, reward: 280 },
+            bonus: { id: "highHeat", label: "Heißes Finale", description: "Mit Heat 3+ abschließen.", target: 3, reward: 280 },
         },
     ],
     industrial: [
@@ -42,7 +42,7 @@ export const MISSION_CHAINS = {
             timer: { base: 54, perStage: 4 },
             to: "anchor",
             pickupSeed: 4,
-            bonus: { id: "noRepair", label: "Werkstattverbot", description: "Keine Garage waehrend des Auftrags.", target: 1, reward: 210 },
+            bonus: { id: "noRepair", label: "Werkstattverbot", description: "Keine Garage während des Auftrags.", target: 1, reward: 210 },
         },
         {
             type: "delivery",
@@ -58,7 +58,7 @@ export const MISSION_CHAINS = {
         {
             type: "heist",
             title: "Foundry Grab",
-            description: "Zieh heisse Ware aus dem Rostguerel und bring sie raus.",
+            description: "Zieh heiße Ware aus dem Rostgürtel und bring sie raus.",
             target: 1,
             timer: { base: 48, perStage: 4 },
             from: { name: "Schmelzhof", x: -18, z: 22 },
@@ -72,7 +72,7 @@ export const MISSION_CHAINS = {
         {
             type: "checkpoint",
             title: "Green Drift",
-            description: "Zieh die Route ueber Wege und Wiesenlinien.",
+            description: "Zieh die Route über Wege und Wiesenlinien.",
             target: { base: 3, perStage: 1, cap: 2 },
             timer: { base: 50, perStage: 4 },
             route: true,
@@ -81,12 +81,12 @@ export const MISSION_CHAINS = {
         {
             type: "pickup",
             title: "Nitro Bloom",
-            description: "Raeum mobile Caches im Parkbecken ab.",
+            description: "Räum mobile Caches im Parkbecken ab.",
             target: { base: 3, perStage: 1 },
             timer: { base: 48, perStage: 4 },
             to: "anchor",
             pickupSeed: 4,
-            bonus: { id: "shortcut", label: "Pfadfinder", description: "Bleib ueber die Park-Cuts in Bewegung.", target: 2, reward: 220 },
+            bonus: { id: "shortcut", label: "Pfadfinder", description: "Bleib über die Park-Cuts in Bewegung.", target: 2, reward: 220 },
         },
         {
             type: "escape",
@@ -111,7 +111,7 @@ export const MISSION_CHAINS = {
             to: { poi: "safehouse" },
             minimumHeat: 2,
             maxRiskLevel: 3,
-            bonus: { id: "highHeat", label: "Heisse Route", description: "Mit Heat 3+ abgeben.", target: 3, reward: 280 },
+            bonus: { id: "highHeat", label: "Heiße Route", description: "Mit Heat 3+ abgeben.", target: 3, reward: 280 },
         },
         {
             type: "checkpoint",
@@ -125,7 +125,7 @@ export const MISSION_CHAINS = {
         {
             type: "escape",
             title: "Breakwater Exit",
-            description: "Schuettel den Druck ab und bring den Run heim.",
+            description: "Schüttel den Druck ab und bring den Run heim.",
             target: 1,
             timer: { base: 36, perStage: 4 },
             to: { poi: "safehouse" },
@@ -162,7 +162,7 @@ export const BOSS_MISSIONS = [
         bossType: "armoredTransporter",
         districtId: "industrial",
         maxRiskLevel: 3,
-        bonus: { id: "highHeat", label: "Grosswild", description: "Mit Heat 4+ abgeben.", target: 4, reward: 420 },
+        bonus: { id: "highHeat", label: "Großwild", description: "Mit Heat 4+ abgeben.", target: 4, reward: 420 },
     },
     {
         type: "bossHeli",
@@ -176,7 +176,7 @@ export const BOSS_MISSIONS = [
         bossType: "helicopterHunt",
         districtId: "downtown",
         maxRiskLevel: 2,
-        bonus: { id: "quickFinish", label: "Aus dem Licht", description: "Finde frueh den Ausstieg.", target: 24, reward: 400 },
+        bonus: { id: "quickFinish", label: "Aus dem Licht", description: "Finde früh den Ausstieg.", target: 24, reward: 400 },
     },
 ];
 

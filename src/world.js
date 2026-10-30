@@ -91,6 +91,84 @@ function getHazardMaterial() {
     return hazardMaterial;
 }
 
+let facadeTexture = null;
+let roofTexture = null;
+
+function getFacadeTexture() {
+    if (!facadeTexture) {
+        facadeTexture = canvasTexture(128, (ctx, size) => {
+            const rng = mulberry32(21);
+            ctx.fillStyle = "#e6e6e6";
+            ctx.fillRect(0, 0, size, size);
+            for (let i = 0; i < 400; i += 1) {
+                const v = 205 + Math.floor(rng() * 40);
+                ctx.fillStyle = `rgb(${v},${v},${v})`;
+                ctx.fillRect(rng() * size, rng() * size, 2, 2);
+            }
+            ctx.strokeStyle = "rgba(0,0,0,0.28)";
+            ctx.lineWidth = 2;
+            ctx.strokeRect(1, 1, size - 2, size - 2);
+            ctx.beginPath();
+            ctx.moveTo(0, size / 2);
+            ctx.lineTo(size, size / 2);
+            ctx.moveTo(size / 2, 0);
+            ctx.lineTo(size / 2, size);
+            ctx.stroke();
+        });
+    }
+    return facadeTexture;
+}
+
+function getRoofTexture() {
+    if (!roofTexture) {
+        roofTexture = canvasTexture(128, (ctx, size) => {
+            const rng = mulberry32(33);
+            ctx.fillStyle = "#c9c9c9";
+            ctx.fillRect(0, 0, size, size);
+            ctx.strokeStyle = "rgba(0,0,0,0.5)";
+            ctx.lineWidth = 6;
+            ctx.strokeRect(3, 3, size - 6, size - 6);
+            for (let i = 0; i < 5; i += 1) {
+                const x = 14 + rng() * (size - 44);
+                const y = 14 + rng() * (size - 44);
+                ctx.fillStyle = "#8d8d8d";
+                ctx.fillRect(x, y, 18 + rng() * 10, 14 + rng() * 8);
+                ctx.strokeStyle = "rgba(0,0,0,0.45)";
+                ctx.lineWidth = 2;
+                ctx.strokeRect(x, y, 20, 14);
+            }
+        });
+    }
+    return roofTexture;
+}
+
+function createAsphaltTexture() {
+    return canvasTexture(256, (ctx, size) => {
+        const rng = mulberry32(5);
+        ctx.fillStyle = "#d4d4d4";
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 2600; i += 1) {
+            const v = 150 + Math.floor(rng() * 90);
+            ctx.fillStyle = `rgba(${v},${v},${v},0.7)`;
+            ctx.fillRect(rng() * size, rng() * size, 1 + rng() * 2, 1 + rng() * 2);
+        }
+        ctx.strokeStyle = "rgba(40,40,40,0.5)";
+        ctx.lineWidth = 1.2;
+        for (let i = 0; i < 6; i += 1) {
+            let x = rng() * size;
+            let y = rng() * size;
+            ctx.beginPath();
+            ctx.moveTo(x, y);
+            for (let step = 0; step < 6; step += 1) {
+                x += (rng() - 0.5) * 34;
+                y += (rng() - 0.3) * 30;
+                ctx.lineTo(x, y);
+            }
+            ctx.stroke();
+        }
+    });
+}
+
 function createWaterMaterial() {
     const bumpMap = canvasTexture(128, (ctx, size) => {
         const rng = mulberry32(7);
@@ -140,6 +218,16 @@ export function createWorld(scene, sharedMaterials) {
     ground.receiveShadow = true;
     scene.add(ground);
 
+    const asphaltTexture = createAsphaltTexture();
+    asphaltTexture.repeat.set(1, 24);
+    sharedMaterials.asphalt.map = asphaltTexture;
+    sharedMaterials.asphalt.needsUpdate = true;
+    const asphaltAcross = sharedMaterials.asphalt.clone();
+    asphaltAcross.map = asphaltTexture.clone();
+    asphaltAcross.map.repeat.set(24, 1);
+    asphaltAcross.map.needsUpdate = true;
+    const asphaltMaterials = [sharedMaterials.asphalt, asphaltAcross];
+
     for (const sx of CONFIG.map.streets) {
         const road = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.streetWidth, 0.08, CONFIG.map.size + 16), sharedMaterials.asphalt);
         road.position.set(sx, 0.01, 0);
@@ -149,7 +237,7 @@ export function createWorld(scene, sharedMaterials) {
     }
 
     for (const sz of CONFIG.map.streets) {
-        const road = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size + 16, 0.09, CONFIG.map.streetWidth), sharedMaterials.asphalt);
+        const road = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size + 16, 0.09, CONFIG.map.streetWidth), asphaltAcross);
         road.position.set(0, 0.02, sz);
         road.receiveShadow = true;
         scene.add(road);
@@ -243,8 +331,10 @@ export function createWorld(scene, sharedMaterials) {
             const level = (0.5 + night * 2.5) * pulse;
             handles.beaconMaterials[i].color.setRGB(level, level * 0.1, level * 0.1);
         }
-        sharedMaterials.asphalt.roughness = 0.92 - wet * 0.62;
-        sharedMaterials.asphalt.metalness = 0.03 + wet * 0.2;
+        for (const asphalt of asphaltMaterials) {
+            asphalt.roughness = 0.92 - wet * 0.62;
+            asphalt.metalness = 0.03 + wet * 0.2;
+        }
         if (handles.puddleMaterial) handles.puddleMaterial.opacity = wet * 0.85;
     }
 
@@ -410,7 +500,8 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
         const slot = slots[index];
         const width = 4.4 + random() * 2.1;
         const depth = 4.3 + random() * 2.4;
-        const height = 14 + random() * 18;
+        // Towers stay below the camera height (26 m) so the view never ends up inside one.
+        const height = 14 + random() * 10;
         const x = bx + slot.x + (random() - 0.5) * 0.8;
         const z = bz + slot.z + (random() - 0.5) * 0.8;
         const tower = createBuilding(width, depth, height, x, z, {
@@ -807,6 +898,9 @@ function createBuilding(width, depth, height, x, z, style = {}) {
             metalness: style.metalness ?? 0.12,
         })
     );
+    body.material.map = getFacadeTexture().clone();
+    body.material.map.repeat.set(Math.max(1, Math.round(width / 3)), Math.max(1, Math.round(height / 3)));
+    body.material.map.needsUpdate = true;
     body.position.y = height / 2;
     body.castShadow = true;
     body.receiveShadow = true;
@@ -869,6 +963,8 @@ function createBuilding(width, depth, height, x, z, style = {}) {
         new THREE.BoxGeometry(width + 0.9, 0.34, depth + 0.9),
         createMaterial(style.roofColor ?? "#10151c", { roughness: 0.45, metalness: 0.25 })
     );
+    roof.material.map = getRoofTexture();
+    roof.material.needsUpdate = true;
     roof.position.y = height + 0.18;
     roof.castShadow = true;
     group.add(roof);
@@ -954,7 +1050,7 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
         group.userData = {
             radius: 1.55,
             type: "dumpster",
-            label: "Muellcontainer",
+            label: "Müllcontainer",
             reward: 80,
             color: "#7b8790",
             destructible: true,

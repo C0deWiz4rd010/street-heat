@@ -246,6 +246,31 @@ assert.equal(tour.active, false, "all steps time out eventually");
 assert.equal(finished, true);
 assert.equal(createOnboarding({ isDone: () => true }).update(tipState, 1), "", "finished tutorial stays hidden");
 
+// --- Wall response, paints, economy ---------------------------------------------------------
+const { glancingWallImpact, headOnDamp } = await import("../src/physics/vehicle.js");
+const { PAINTS } = await import("../src/config.js");
+const { economyTable, estimateRunCash } = await import("../src/economy.js");
+const slider = { vx: 10, vz: 6 };
+const slideSignal = glancingWallImpact(slider, -1, 0, Math.hypot(10, 6), 0.5, 1, 1 / 60);
+assert.ok(slider.vx <= 0.01, "the velocity component into the wall is removed (bounce is at most tiny)");
+assert.ok(slider.vz > 5 && slider.vz < 6, "tangential speed survives with slight friction");
+assert.ok(slideSignal > 0 && slideSignal <= 1, "sliding produces an audio signal");
+assert.equal(glancingWallImpact({ vx: -5, vz: 0 }, -1, 0, 5, 0.3, 1, 1 / 60), 0, "moving away from the wall does nothing");
+const crash = { vx: 12, vz: 0 };
+headOnDamp(crash, 1.9);
+assert.ok(crash.vx < 6.5, "head-on hits shed most of the speed");
+
+assert.equal(PAINTS[0].id, "default");
+assert.equal(new Set(PAINTS.map((paint) => paint.id)).size, PAINTS.length, "paint ids are unique");
+assert.ok(PAINTS.filter((paint) => paint.unlock).every((paint) => REPUTATION_TIERS.some((tier) => tier.unlock === paint.unlock)), "every locked paint is a reputation reward");
+
+const economy = economyTable();
+assert.ok(economy.perRun > 500, "a run pays something");
+assert.ok(estimateRunCash({ missions: 6 }) > estimateRunCash({ missions: 3 }), "more missions pay more");
+assert.ok(economy.rows.every((row) => row.price > 0 && Number.isFinite(row.runs)));
+assert.ok(economy.rows.filter((row) => row.item.startsWith("Auto")).every((row) => row.runs >= 2.5 && row.runs <= 5.5), "a new car should cost roughly 3-5 typical runs");
+console.log(`economy: ~$${economy.perRun}/run -> ` + economy.rows.filter((row) => row.item.startsWith("Auto")).map((row) => `${row.item} ${row.runs.toFixed(1)} Runs`).join(", "));
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

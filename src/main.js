@@ -192,6 +192,10 @@ ui.startBtn.addEventListener("click", () => {
 ui.garageBtn.addEventListener("click", () => runtime.openGarage());
 ui.closeGarageBtn.addEventListener("click", () => runtime.closeGarage());
 ui.wipeProfileBtn.addEventListener("click", () => openModal(ui.confirmPanel));
+ui.paintList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-paint-id]");
+    if (button) runtime.setPaint(button.dataset.paintId);
+});
 ui.carList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-car-index]");
     if (!button) return;

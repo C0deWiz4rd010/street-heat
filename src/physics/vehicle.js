@@ -118,6 +118,31 @@ export function applySpeedFactor(p, factor) {
     p.speedMag *= factor;
 }
 
+/**
+ * Glancing/hard wall hit: projects the normal component away (with a little bounce for hard hits) and
+ * bleeds tangential speed. Returns the wall-slide signal (0..1) for audio.
+ */
+export function glancingWallImpact(p, nx, nz, impactMag, speedRatioWall, mass, dt) {
+    const velDotN = p.vx * nx + p.vz * nz;
+    if (velDotN >= 0) return 0;
+    const restitution = clamp(0.1 + mass * 0.05 + speedRatioWall * 0.1, 0.1, 0.35);
+    const glancing = Math.min(1, Math.abs(velDotN) / Math.max(0.1, impactMag));
+    const effective = restitution * glancing;
+    p.vx -= (1 + effective) * velDotN * nx;
+    p.vz -= (1 + effective) * velDotN * nz;
+    const decay = Math.exp(-0.6 * dt);
+    p.vx *= decay;
+    p.vz *= decay;
+    return Math.min(1, Math.abs(impactMag - Math.abs(velDotN)) * 0.18);
+}
+
+/** Wall hit without a usable normal (corner): heavy damping scaled by mass. */
+export function headOnDamp(p, mass) {
+    const factor = Math.min(0.5, 0.22 + mass * 0.18);
+    p.vx *= factor;
+    p.vz *= factor;
+}
+
 /** Removes the velocity component pointing into a surface with the given outward normal. */
 export function cancelNormalVelocity(p, nx, nz) {
     const into = p.vx * nx + p.vz * nz;

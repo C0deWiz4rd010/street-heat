@@ -6,6 +6,16 @@
     --gold: #ffc64d;
     --blue: #63c8ff;
     --green: #57d68d;
+    --purple: #c9a5ff;
+    --pink: #ff7ad9;
+    --mint: #79ffb3;
+    --orange: #ff9c45;
+    --ice: #f7fbff;
+    --map-bg: #091017;
+    --traffic: #e8e2ce;
+    --warn: #ff3b3b;
+    --warn-alt: #ffd24d;
+    --ink-hard: #ffffff;
 }
 
 * {
@@ -1329,3 +1339,60 @@ select:focus-visible,
     }
 }
 
+
+.upgrade-grid {
+    display: none;
+}
+
+.contract-strip[hidden] {
+    display: none;
+}
+
+.stick {
+    background: rgba(7, 10, 15, 0.6);
+    border: 2px solid rgba(255, 255, 255, 0.22);
+    border-radius: 50%;
+    height: 132px;
+    position: relative;
+    touch-action: none;
+    width: 132px;
+}
+
+.stick-knob {
+    background: rgba(111, 224, 255, 0.55);
+    border: 2px solid rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    height: 54px;
+    left: calc(50% - 27px);
+    pointer-events: none;
+    position: absolute;
+    top: calc(50% - 27px);
+    width: 54px;
+}
+
+.paint-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.paint-swatch {
+    background: rgba(255, 255, 255, 0.06);
+    border: 2px solid rgba(255, 255, 255, 0.16);
+    border-left: 14px solid var(--swatch);
+    border-radius: 8px;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+    font-size: 13px;
+    padding: 6px 10px;
+}
+
+.paint-swatch.selected {
+    border-color: var(--blue);
+}
+
+.paint-swatch:disabled {
+    cursor: not-allowed;
+    opacity: 0.4;
+}
