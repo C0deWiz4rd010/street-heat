@@ -1,4 +1,9 @@
-import { CAR_MODELS, UPGRADES } from "./config.js";
+import { CAR_MODELS, CONFIG, UPGRADES } from "./config.js";
+
+/** Hit points and nitro capacity grow 18 per upgrade level. One formula for the game and the HUD. */
+export const UPGRADE_CAPACITY_STEP = 18;
+export const maxHealth = (upgrades) => CONFIG.player.maxHealth + (upgrades?.armor ?? 0) * UPGRADE_CAPACITY_STEP;
+export const nitroCapacity = (upgrades) => CONFIG.player.nitroMax + (upgrades?.nitro ?? 0) * UPGRADE_CAPACITY_STEP;
 
 // Balancing assumptions for a "typical" run. The formulas mirror completeMission(), the pickup table
 // and the district cash multiplier, so changing a reward in the game shows up here.

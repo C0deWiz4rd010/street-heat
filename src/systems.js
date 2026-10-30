@@ -1,10 +1,13 @@
 import * as THREE from "three";
 import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, DISTRICT_CONTRACTS, PAINTS, POLICE_UNITS, RACE, REPUTATION_GAINS, REPUTATION_TIERS, TAGS_PER_DISTRICT, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
+import { clamp, distanceSq, turnToward, axisVelocity, axisYaw, wrapAngle } from "./util/math.js";
+import { maxHealth, nitroCapacity } from "./economy.js";
+import { registerCombo, stepHeatDecay, tickCombo } from "./scoring.js";
 import { generateTags, reputationTier } from "./progression.js";
 import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, surfaceAt, updateDrift } from "./physics/vehicle.js";
-import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
+import { SAVE_VERSION, clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createEffects, disposeObject, markShared } from "./effects.js";
 import { applyTuning, createCar, createMaterial, replaceCarModel, setHeadlightBeamLevel, setPaint, updateCarVisuals } from "./vehicles.js";
@@ -850,8 +853,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             car.pushVz *= pushDecay;
 
             // Axis-direction movement + any push
-            const axisVx = car.axis === "x" ? car.speed * car.direction : 0;
-            const axisVz = car.axis === "z" ? car.speed * car.direction : 0;
+            const { vx: axisVx, vz: axisVz } = axisVelocity(car.axis, car.speed, car.direction);
             car.x += (axisVx + car.pushVx) * dt;
             car.z += (axisVz + car.pushVz) * dt;
 
@@ -879,10 +881,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const totalSpeed = Math.sqrt(totalVx * totalVx + totalVz * totalVz);
             if (totalSpeed > 0.5) {
                 const targetAngle = Math.atan2(totalVx, totalVz);
-                let angleDiff = targetAngle - car.mesh.rotation.y;
-                while (angleDiff > Math.PI) angleDiff -= Math.PI * 2;
-                while (angleDiff < -Math.PI) angleDiff += Math.PI * 2;
-                car.mesh.rotation.y += angleDiff * Math.min(1, dt * 6.5);
+                car.mesh.rotation.y += wrapAngle(targetAngle - car.mesh.rotation.y) * Math.min(1, dt * 6.5);
             }
 
             if (car.headlights) {
@@ -1206,12 +1205,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 targetX = agent.wpX;
                 targetZ = agent.wpZ;
             }
-            const targetAngle = Math.atan2(targetX - agent.x, targetZ - agent.z);
-            let diff = targetAngle - agent.rotation;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            const turnRate = unit.turnRate;
-            agent.rotation += Math.sign(diff) * Math.min(Math.abs(diff), (turnRate + state.wanted.level * 0.2) * dt);
+            agent.rotation = turnToward(agent.rotation, agent.x, agent.z, targetX, targetZ, (unit.turnRate + state.wanted.level * 0.2) * dt);
             agent.targetSpeed = getPoliceTargetSpeed(agent);
             agent.speed += (agent.targetSpeed - agent.speed) * dt * 2.4;
 
@@ -1239,10 +1233,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         if (tlen > 0.01) {
                             // Interp rotation toward tangent direction
                             const newAngle = Math.atan2(tx / tlen, tz / tlen);
-                            let rdiff = newAngle - agent.rotation;
-                            while (rdiff > Math.PI) rdiff -= Math.PI * 2;
-                            while (rdiff < -Math.PI) rdiff += Math.PI * 2;
-                            agent.rotation += rdiff * 0.6;
+                            agent.rotation += wrapAngle(newAngle - agent.rotation) * 0.6;
                         }
                     }
                 } else {
@@ -1371,8 +1362,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         if (state.wanted.level > 0 && !near) {
             // Phase 5.4: decay delay scales with heat level
-            const decayDelayScaled = CONFIG.police.decayDelay * (1 + state.wanted.level * 0.3);
-            state.wanted.decay += dt * (isInEscapeCover(state.player.x, state.player.z) ? 1.45 : 1);
+            const decayStep = stepHeatDecay({
+                decay: state.wanted.decay,
+                dt,
+                level: state.wanted.level,
+                covered: isInEscapeCover(state.player.x, state.player.z),
+                baseDelay: CONFIG.police.decayDelay,
+            });
+            state.wanted.decay = decayStep.decay;
             // Mini-pursuit wave during decay at heat >= 3
             state.miniPursuitTimer = (state.miniPursuitTimer ?? 0) + dt;
             if (state.wanted.level >= 3 && state.miniPursuitTimer > 5 && Math.random() < 0.1) {
@@ -1381,10 +1378,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     spawnPolice(true, "motorcycle");
                 }
             }
-            if (state.wanted.decay > decayDelayScaled) {
-                state.wanted.decay = 0;
-                updateWanted(state.wanted.level - 1);
-            }
+            if (decayStep.drop) updateWanted(state.wanted.level - 1);
         } else {
             state.wanted.decay = 0;
             state.miniPursuitTimer = 0;
@@ -1742,11 +1736,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 racer.wpZ = wp.z;
                 racer.wpTimer = 0.3;
             }
-            const targetAngle = Math.atan2(racer.wpX - racer.x, racer.wpZ - racer.z);
-            let diff = targetAngle - racer.rotation;
-            while (diff > Math.PI) diff -= Math.PI * 2;
-            while (diff < -Math.PI) diff += Math.PI * 2;
-            racer.rotation += Math.sign(diff) * Math.min(Math.abs(diff), 2.8 * dt);
+            const diff = wrapAngle(Math.atan2(racer.wpX - racer.x, racer.wpZ - racer.z) - racer.rotation);
+            racer.rotation = turnToward(racer.rotation, racer.x, racer.z, racer.wpX, racer.wpZ, 2.8 * dt);
             // Rubber band: rivals ease off when far ahead and push when the player is close behind.
             const lead = racer.index - race.player.index;
             const speedTarget = racer.cruise * (Math.abs(diff) > 0.9 ? 0.55 : 1) * (lead > 0 ? 0.92 : lead < 0 ? 1.08 : 1);
@@ -2089,7 +2080,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     : { ...CAR_MODELS[2], name: "Street Racer", color: "#79ffb3", trim: "#14261e", roof: "sport" };
             const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
             mesh.position.set(x, 0.36, z);
-            mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+            mesh.rotation.y = axisYaw(axis, direction);
             const lights = addAmbientHeadlights(mesh, model, event.color);
             return {
                 mesh,
@@ -2185,7 +2176,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const x = axis === "x" ? pos : street;
         const z = axis === "z" ? pos : street;
         mesh.position.set(x, 0.35, z);
-        mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+        mesh.rotation.y = axisYaw(axis, direction);
         const headlights = addAmbientHeadlights(mesh, model);
         scene.add(mesh);
         const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
@@ -2595,18 +2586,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function addScore(amount, missionReward = false, category = missionReward ? "missions" : "other") {
         if (amount <= 0) return 0;
-        if (missionReward) state.combo.chain += 3;
-        else state.combo.chain += 1;
-        state.combo.timer = missionReward ? 6 : 4.2;
-        state.combo.maxTimer = state.combo.timer;
-        state.combo.best = Math.max(state.combo.best, state.combo.chain);
-        // Phase 6.1: provoke score boost
-        const provokeBonus = (state.provoke?.active ?? 0) > 0 ? 0.5 : 0;
-        state.combo.multiplier = clamp(
-            HEAT_TIERS[state.wanted.level].score + Math.floor(Math.max(0, state.combo.chain - 1) / 4) * 0.25 + provokeBonus,
-            1,
-            4.3
-        );
+        registerCombo(state.combo, {
+            missionReward,
+            heatScore: HEAT_TIERS[state.wanted.level].score,
+            provokeBonus: (state.provoke?.active ?? 0) > 0 ? 0.5 : 0,
+        });
         const gained = amount * state.combo.multiplier;
         state.score += gained;
         state.stats.breakdown[category] = (state.stats.breakdown[category] ?? 0) + gained;
@@ -2673,26 +2657,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function updateCombo(dt) {
-        if (state.combo.timer <= 0) {
-            state.combo.chain = 0;
-            state.combo.multiplier = 1;
-            state.combo.driftBank = 0;
-            return;
-        }
-        state.combo.timer = Math.max(0, state.combo.timer - dt);
-        if (state.combo.timer === 0) {
-            state.combo.chain = 0;
-            state.combo.multiplier = 1;
-        }
+        if (tickCombo(state.combo, dt)) return;
+        if (state.combo.timer <= 0) state.combo.driftBank = 0;
     }
 
-    function getMaxHealth() {
-        return CONFIG.player.maxHealth + state.upgrades.armor * 18;
-    }
-
-    function getNitroMax() {
-        return CONFIG.player.nitroMax + state.upgrades.nitro * 18;
-    }
+    const getMaxHealth = () => maxHealth(state.upgrades);
+    const getNitroMax = () => nitroCapacity(state.upgrades);
 
     function getUpgradeCost(id) {
         const level = state.upgrades[id] ?? 0;
@@ -2878,7 +2848,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         profileDirty = false;
         lastProfileFlush = performance.now();
         state.profile = {
-            version: 2,
+            version: SAVE_VERSION,
             bestScore: Math.max(state.bestScore, Math.round(state.score)),
             cash: Math.max(0, Math.round(state.cash)),
             selectedCarId: CAR_MODELS[state.playerModelIndex].id,
@@ -3048,7 +3018,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const model = { ...CAR_MODELS[3], name: "APC Van", color: "#626b76", trim: "#171b21", width: 2.38, length: 5.3 };
             const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
             mesh.position.set(x, 0.38, z);
-            mesh.rotation.y = axis === "x" ? direction * Math.PI / 2 : direction > 0 ? 0 : Math.PI;
+            mesh.rotation.y = axisYaw(axis, direction);
             const escortLight = addAmbientHeadlights(mesh, model, "#ffc64d");
             scene.add(mesh);
             missionBoss = {
@@ -3463,17 +3433,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function distanceTo(x, z) {
         return Math.sqrt(distanceSq(state.player.x, state.player.z, x, z));
     }
-
-    function distanceSq(ax, az, bx, bz) {
-        const dx = ax - bx;
-        const dz = az - bz;
-        return dx * dx + dz * dz;
-    }
-
-    function clamp(value, min, max) {
-        return Math.max(min, Math.min(max, value));
-    }
-
     function getPoliceVisibilityFactor() {
         let factor = 1;
         if (state.time.phase === "night") factor += 0.14;
@@ -3664,9 +3623,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             event.z = clamp(event.z, minZ, maxZ);
         }
         event.mesh.position.set(event.x, event.baseY, event.z);
-        event.mesh.rotation.y = event.axis === "x"
-            ? event.direction > 0 ? Math.PI / 2 : -Math.PI / 2
-            : event.direction > 0 ? 0 : Math.PI;
+        event.mesh.rotation.y = axisYaw(event.axis, event.direction);
         if (event.headlights) {
             const headlightIntensity = state.time.phase === "night" ? 1 : state.weather.mode === "fog" ? 0.72 : 0.25;
             for (const light of event.headlights) light.material.emissiveIntensity = headlightIntensity;

@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { CONFIG, DISTRICTS, POIS } from "./config.js";
 import { markShared } from "./effects.js";
+import { clamp } from "./util/math.js";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { createMaterial } from "./vehicles.js";
 
@@ -1387,11 +1388,6 @@ function shuffle(items) {
     }
     return next;
 }
-
-function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
-}
-
 function createScannerZones(scene, scannerZones) {
     const definitions = [
         { x: 26, z: 26, radius: 8.4, districtId: "downtown", label: "Downtown Scan", heatBoost: 0.9, color: "#63c8ff" },

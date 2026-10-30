@@ -1,9 +1,29 @@
+// The storage key keeps its old name so existing saves are found; the format version lives inside the data.
 const SAVE_KEY = "neon-pursuit-profile-v2";
+export const SAVE_VERSION = 3;
+
+/**
+ * Brings a stored profile up to the current format. v2 -> v3 adds district reputation, graffiti tags,
+ * reputation unlocks, the paint job and the carried-over contract.
+ */
+export function migrateProfile(raw) {
+    const profile = { ...raw };
+    const version = Number(profile.version) || 1;
+    if (version < 3) {
+        profile.reputation = profile.reputation ?? { downtown: 0, industrial: 0, park: 0, harbor: 0 };
+        profile.tags = profile.tags ?? [];
+        profile.unlocks = profile.unlocks ?? [];
+        profile.paint = profile.paint ?? "default";
+        profile.contract = profile.contract ?? null;
+    }
+    profile.version = Math.max(version, SAVE_VERSION);
+    return profile;
+}
 
 export function createDefaultProfile(carModels, upgrades) {
     const firstCar = carModels[0]?.id ?? "comet";
     return {
-        version: 2,
+        version: SAVE_VERSION,
         bestScore: 0,
         cash: 0,
         selectedCarId: firstCar,
@@ -30,7 +50,7 @@ export function loadProfile(carModels, upgrades) {
     try {
         const raw = window.localStorage.getItem(SAVE_KEY);
         if (!raw) return fallback;
-        const parsed = JSON.parse(raw);
+        const parsed = migrateProfile(JSON.parse(raw));
         const unlockedCars = Array.isArray(parsed.unlockedCars) && parsed.unlockedCars.length > 0
             ? parsed.unlockedCars.filter((id) => carModels.some((car) => car.id === id))
             : fallback.unlockedCars;
@@ -38,6 +58,7 @@ export function loadProfile(carModels, upgrades) {
         return {
             ...fallback,
             ...parsed,
+            version: SAVE_VERSION,
             bestScore: Number(parsed.bestScore) || 0,
             cash: Number(parsed.cash) || 0,
             selectedCarId,

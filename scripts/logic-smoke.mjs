@@ -347,6 +347,75 @@ assert.equal(ramp, 1, "and reaches full lock");
 assert.ok(rampSteer(1, -1, 1 / 60) < rampSteer(1, 0, 1 / 60), "reversing is faster than centring");
 assert.equal(rampSteer(0.05, 0, 1 / 30), 0, "centring does not overshoot zero");
 
+// --- Phase 8: shared math, scoring, heat decay, capacity formulas, save migration ----------
+const { SAVE_VERSION, migrateProfile } = await import("../src/save.js");
+const { axisVelocity, axisYaw, clamp: clampValue, distanceSq: distSq, turnToward, wrapAngle } = await import("../src/util/math.js");
+const { COMBO_MAX_MULTIPLIER, comboMultiplier, heatDecayDelay, registerCombo, stepHeatDecay, tickCombo } = await import("../src/scoring.js");
+const { maxHealth, nitroCapacity } = await import("../src/economy.js");
+
+assert.equal(clampValue(5, 0, 3), 3);
+assert.ok(Math.abs(wrapAngle(Math.PI * 3) - Math.PI) < 1e-9 && Math.abs(wrapAngle(-Math.PI * 2.5) + Math.PI / 2) < 1e-9, "angles wrap into (-PI, PI]");
+assert.equal(distSq(0, 0, 3, 4), 25);
+assert.ok(Math.abs(turnToward(0, 0, 0, 10, 0, 10) - Math.PI / 2) < 1e-9, "heading 0 faces +z; a target on +x is 90 degrees away");
+assert.equal(turnToward(0, 0, 0, 10, 0, 0.1), 0.1, "turning is limited per step");
+assert.ok(turnToward(3, 0, 0, 0, -10, 1) > 3, "takes the short way round across +-PI");
+assert.deepEqual(axisVelocity("x", 5, -1), { vx: -5, vz: 0 });
+assert.equal(axisYaw("z", -1), Math.PI);
+assert.equal(axisYaw("x", 1), Math.PI / 2);
+
+assert.equal(comboMultiplier(1, 1), 1);
+assert.equal(comboMultiplier(9, 1), 1.5, "+0.25 per four chained hits");
+assert.equal(comboMultiplier(500, 3), COMBO_MAX_MULTIPLIER, "the multiplier is capped");
+assert.equal(comboMultiplier(1, 1, 0.5), 1.5, "provoke adds a flat bonus");
+const combo = { chain: 0, multiplier: 1, timer: 0, best: 0 };
+registerCombo(combo, { heatScore: 1 });
+registerCombo(combo, { missionReward: true, heatScore: 1 });
+assert.equal(combo.chain, 4, "a mission reward counts as three hits");
+assert.equal(combo.timer, 6, "and keeps the combo alive longer");
+assert.equal(combo.best, 4);
+assert.equal(tickCombo(combo, 5), false);
+assert.equal(tickCombo(combo, 2), true, "the combo reports when it runs out");
+assert.equal(combo.chain, 0);
+assert.equal(combo.multiplier, 1);
+
+assert.equal(heatDecayDelay(7, 0), 7);
+assert.ok(heatDecayDelay(7, 5) > heatDecayDelay(7, 1), "higher heat takes longer to shake");
+let decay = 0;
+let drops = 0;
+for (let i = 0; i < 100; i += 1) {
+    const stepResult = stepHeatDecay({ decay, dt: 0.5, level: 2, baseDelay: 7 });
+    decay = stepResult.decay;
+    if (stepResult.drop) drops += 1;
+}
+assert.equal(drops, 4, "50 s at heat 2 (11.2 s delay, 0.5 s steps) drops heat four times");
+assert.ok(stepHeatDecay({ decay: 5, dt: 1, level: 0, baseDelay: 7, covered: true }).decay > stepHeatDecay({ decay: 5, dt: 1, level: 0, baseDelay: 7 }).decay, "cover speeds up the decay");
+
+assert.equal(maxHealth({ armor: 0 }), 100);
+assert.equal(maxHealth({ armor: 3 }), 154);
+assert.equal(nitroCapacity({ nitro: 2 }), 136);
+assert.equal(maxHealth(undefined), 100, "missing upgrades fall back to the base value");
+
+const oldProfile = { version: 2, bestScore: 321, cash: 77, selectedCarId: "needle", unlockedCars: ["comet", "needle", "ghost-car"], upgrades: { engine: 9, grip: -4 }, achievements: ["firstMission"], lifetime: { missions: 4 } };
+const migrated = migrateProfile(oldProfile);
+assert.equal(migrated.version, SAVE_VERSION, "v2 saves are lifted to the current version");
+assert.deepEqual(migrated.reputation, { downtown: 0, industrial: 0, park: 0, harbor: 0 });
+assert.deepEqual([migrated.tags, migrated.unlocks, migrated.paint, migrated.contract], [[], [], "default", null]);
+assert.equal(migrated.bestScore, 321, "old data survives the migration");
+assert.equal(migrateProfile({ version: 1 }).version, SAVE_VERSION, "very old saves too");
+assert.equal(migrateProfile({ ...migrated, reputation: { park: 50 } }).reputation.park, 50, "a v3 save is not touched");
+
+storage.set("neon-pursuit-profile-v2", JSON.stringify(oldProfile));
+const loadedOld = loadProfile(CAR_MODELS, UPGRADES);
+assert.equal(loadedOld.version, SAVE_VERSION);
+assert.equal(loadedOld.cash, 77);
+assert.equal(loadedOld.selectedCarId, "needle");
+assert.deepEqual(loadedOld.unlockedCars, ["comet", "needle"], "unknown car ids are dropped");
+assert.equal(loadedOld.upgrades.engine, UPGRADES.engine.max, "upgrade levels are clamped to the maximum");
+assert.equal(loadedOld.upgrades.grip, 0, "and to zero");
+assert.equal(loadedOld.reputation.downtown, 0);
+storage.set("neon-pursuit-profile-v2", "{ this is not json");
+assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0, "a corrupt save falls back to a fresh profile");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

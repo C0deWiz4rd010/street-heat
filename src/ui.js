@@ -1,4 +1,6 @@
 import { reputationTier } from "./progression.js";
+import { clamp } from "./util/math.js";
+import { maxHealth, nitroCapacity } from "./economy.js";
 import { REPUTATION_TIERS } from "./config.js";
 import { ACHIEVEMENTS, COMBO_TIERS, PAINTS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
 
@@ -413,8 +415,8 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     const timeLabel = state.time?.label ?? "Tag";
     ui.weatherName.textContent = `${timeLabel} | ${state.weather?.label ?? "Klar"}`;
 
-    const healthMax = CONFIG.player.maxHealth + state.upgrades.armor * 18;
-    const nitroMax = CONFIG.player.nitroMax + state.upgrades.nitro * 18;
+    const healthMax = maxHealth(state.upgrades);
+    const nitroMax = nitroCapacity(state.upgrades);
     ui.healthText.textContent = `${Math.round(player.health)}/${healthMax}`;
     ui.healthFill.style.width = `${clamp(player.health / healthMax, 0, 1) * 100}%`;
     ui.nitroText.textContent = `${Math.round(player.nitro)}/${nitroMax}`;
@@ -569,7 +571,7 @@ function renderTacho(ui, state, carModel) {
     }
 
     // Nitro ring (inner arc) and rev ring (outer arc, simulated five gears).
-    const nitroMax = CONFIG.player.nitroMax + state.upgrades.nitro * 18;
+    const nitroMax = nitroCapacity(state.upgrades);
     const nitroRatio = Math.max(0, Math.min(1, state.player.nitro / nitroMax));
     ctx.lineWidth = 4;
     ctx.strokeStyle = "rgba(255,255,255,0.1)";
@@ -987,8 +989,4 @@ function nearestPoi(player) {
 
 function getUpgradeCost(id, level, upgrade) {
     return Math.round(upgrade.baseCost * (1 + level * 0.72 + level * level * 0.18) / 10) * 10;
-}
-
-function clamp(value, min, max) {
-    return Math.max(min, Math.min(max, value));
 }
