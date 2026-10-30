@@ -3,7 +3,7 @@ import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PIC
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createEffects, disposeObject, markShared } from "./effects.js";
-import { createCar, createMaterial, replaceCarModel } from "./vehicles.js";
+import { applyTuning, createCar, createMaterial, replaceCarModel, updateCarVisuals } from "./vehicles.js";
 import { buildingsNear, insideBuilding, obstacleAt, obstaclesNear, pushOutBuildings, snapStreet } from "./world.js";
 
 const MISSION_DISTRICT_ORDER = ["downtown", "industrial", "park", "harbor"];
@@ -64,7 +64,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     document.addEventListener("visibilitychange", () => {
         if (document.hidden) flushProfile();
     });
-    const playerCar = createCar(CAR_MODELS[state.playerModelIndex], sharedMaterials);
+    const playerCar = createCar(CAR_MODELS[state.playerModelIndex], sharedMaterials, { headlightSpot: true });
     playerCar.position.set(0, 0.38, 0);
     scene.add(playerCar);
     scene.add(helicopter);
@@ -265,6 +265,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         updateParticles(realDt);
         updateSkidMarks(realDt);
+        updateVehicleVisuals(realDt);
         updateCamera(realDt);
         audio?.update(state, realDt);
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
@@ -385,6 +386,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         const nitro = Boolean(keys.shift && player.nitro > 0 && Math.abs(fwdSpeed) > 2);
         player.nitroActive = nitro;
+        player.braking = (reverse && fwdSpeed > 0.5) || handbrake;
         const nitroBonusSpeed = nitro ? CONFIG.player.nitroBonus + nitroLevel * 2.4 + maxSpeed * tierEngineNitroBoost : 0;
         const boostedMax = maxSpeed + nitroBonusSpeed;
 
@@ -3057,6 +3059,59 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         applyWeatherVisuals();
         world.updateVisuals(dt, 1 - state.time.daylight, state.weather.wetness);
+    }
+
+    const policeGlow = [0, 1].map(() => {
+        const light = new THREE.PointLight("#ff2040", 0, 18, 2);
+        scene.add(light);
+        return light;
+    });
+
+    /** Wheel spin, steering, body roll/pitch, brake lights, lightbars and the shared police glow. */
+    function updateVehicleVisuals(dt) {
+        const player = state.player;
+        const night = 1 - (state.time.daylight ?? 1);
+        applyTuning(playerCar, state.upgrades);
+        updateCarVisuals(playerCar, dt, {
+            speed: player.speed,
+            steer: state.lastTurnInput ?? 0,
+            turn: state.lastTurnInput ?? 0,
+            braking: Boolean(player.braking),
+            night: Math.min(1, night + (state.weather.mode === "fog" ? 0.5 : 0)),
+            tilt: true,
+        });
+        for (const car of traffic) {
+            const dir = car.speed ?? 0;
+            updateCarVisuals(car.mesh, dt, { speed: dir, braking: car.speed < (car.naturalSpeed ?? 0) * 0.6 });
+        }
+        let nearA = null;
+        let nearB = null;
+        let distA = Infinity;
+        let distB = Infinity;
+        for (const agent of police) {
+            updateCarVisuals(agent.mesh, dt, { speed: agent.speed ?? 0, braking: (agent.speed ?? 0) < 1.5 });
+            const d = distanceSq(player.x, player.z, agent.x, agent.z);
+            if (d < distA) {
+                nearB = nearA;
+                distB = distA;
+                nearA = agent;
+                distA = d;
+            } else if (d < distB) {
+                nearB = agent;
+                distB = d;
+            }
+        }
+        const flash = Math.floor(performance.now() / 140) % 2 === 0;
+        [nearA, nearB].forEach((agent, i) => {
+            const light = policeGlow[i];
+            if (!agent || (i === 0 ? distA : distB) > 45 * 45) {
+                light.intensity = 0;
+                return;
+            }
+            light.position.set(agent.x, 2.2, agent.z);
+            light.color.set(flash === (i === 0) ? "#ff2040" : "#2f6bff");
+            light.intensity = 9 + 6 * Math.abs(Math.sin(performance.now() / 70));
+        });
     }
 
     function updateDebug(dt) {
