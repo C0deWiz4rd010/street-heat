@@ -126,6 +126,28 @@ assert.deepEqual([edge.vx, edge.vz], [0, 6], "edge only removes the normal compo
 assert.equal(surfaceAt(0, 10, "park", false).id, "road");
 assert.equal(surfaceAt(13, 13, "park", false).id, "grass");
 
+// --- Police AI: street graph, A* and line of sight -----------------------------------------
+const { buildRoadGraph, findPath, hasLineOfSight, nearestNode, nextWaypoint } = await import("../src/ai/police.js");
+const { buildGrid } = await import("../src/world.js");
+const { POLICE_UNITS } = await import("../src/config.js");
+assert.ok(["patrol", "suv", "van", "motorcycle"].every((id) => POLICE_UNITS[id]?.chaseSpeed > 0), "police units must be configured");
+
+const graph = buildRoadGraph();
+assert.equal(graph.nodes.length, 25, "5x5 street crossings");
+const corner = nearestNode(graph, -60, -60);
+const farCorner = nearestNode(graph, 60, 60);
+const route = findPath(graph, corner, farCorner);
+assert.equal(route.length, 9, "corner-to-corner route follows the grid (8 hops)");
+assert.equal(route[0], corner);
+assert.equal(route.at(-1), farCorner);
+const wp = nextWaypoint(graph, -52, -52, 52, 52);
+assert.ok(wp.x === -26 || wp.z === -26, "next waypoint is an adjacent crossing");
+
+const wallWorld = { buildings: [{ x: 0, z: 0, hw: 4, hd: 4, h: 10 }], obstacles: [] };
+wallWorld.grid = { buildings: buildGrid(wallWorld.buildings, 6), obstacles: buildGrid([], 8) };
+assert.equal(hasLineOfSight(wallWorld, -20, 0, 20, 0), false, "a building blocks the view");
+assert.equal(hasLineOfSight(wallWorld, -20, 12, 20, 12), true, "open street keeps the view");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

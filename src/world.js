@@ -267,7 +267,7 @@ function gridKey(x, z) {
     return (Math.floor(x / GRID_CELL) + GRID_OFFSET) * GRID_STRIDE + Math.floor(z / GRID_CELL) + GRID_OFFSET;
 }
 
-function buildGrid(items, margin) {
+export function buildGrid(items, margin) {
     const cells = new Map();
     for (const item of items) {
         const hw = item.hw ?? item.radius ?? 0;

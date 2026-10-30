@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, POLICE_UNITS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
@@ -54,6 +55,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const eventGeo = new THREE.DodecahedronGeometry(0.85, 0);
     const hazardGeo = new THREE.BoxGeometry(4.8, 0.08, 0.7);
     markShared(pickupGeo, eventGeo, hazardGeo);
+    const roadGraph = buildRoadGraph();
+    const crashLog = [];
     const tempTarget = new THREE.Vector3();
     const cameraBase = new THREE.Vector3();
     let cameraBaseReady = false;
@@ -697,7 +700,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
         if (info.nitro) state.player.nitro = Math.min(getNitroMax(), state.player.nitro + info.nitro);
         if (info.emp) triggerEmp(pickup.x, pickup.z);
-        if (info.wanted) updateWanted(state.wanted.level + info.wanted);
+        // Grabbing cash only attracts attention once the cops are already after you.
+        if (info.wanted && !(info.wanted > 0 && state.wanted.level < 1)) updateWanted(state.wanted.level + info.wanted);
         state.stats.pickups += 1;
         state.lifetime.pickups += 1;
         refreshProgress();
@@ -900,7 +904,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         audio?.crash();
                         state.cameraShake = Math.min(0.85, impactSpeed * 0.045);
                         spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
-                        updateWanted(state.wanted.level + 1);
+                        registerTrafficCrash();
                         state.cleanEscape && (state.cleanEscape.crashes = (state.cleanEscape.crashes ?? 0) + 1);
                         state.mission && (state.mission.collisionCount = (state.mission.collisionCount ?? 0) + 1);
                     }
@@ -946,26 +950,54 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function assignPoliceRoles() {
-        // Phase 5.3: re-assign roles every ~2s so cops don't dogpile
-        state.policeAssignments = state.policeAssignments ?? {};
+        // Re-assigned every ~2 s so cops don't dogpile; rebuilt fresh so removed cops leave no entries.
+        const assignments = {};
         let leftFlank = 0;
         let rightFlank = 0;
         let tailers = 0;
+        let pits = 0;
         for (const agent of police) {
             const id = agent.id ?? (agent.id = `cop-${Math.random().toString(36).slice(2, 8)}`);
             if (agent.unitType === "motorcycle") {
-                // Alternate flank sides
-                const role = (leftFlank <= rightFlank) ? "flank-left" : "flank-right";
-                state.policeAssignments[id] = role;
-                if (role === "flank-left") leftFlank++; else rightFlank++;
+                const role = leftFlank <= rightFlank ? "flank-left" : "flank-right";
+                assignments[id] = role;
+                if (role === "flank-left") leftFlank += 1;
+                else rightFlank += 1;
             } else if (agent.unitType === "van") {
-                state.policeAssignments[id] = "block-ahead";
+                assignments[id] = "block-ahead";
             } else if (agent.unitType === "suv") {
-                state.policeAssignments[id] = "ram";
+                assignments[id] = "ram";
+            } else if (tailers < 1) {
+                assignments[id] = "tail";
+                tailers += 1;
+            } else if (state.wanted.level >= 3 && pits < 1) {
+                assignments[id] = "pit";
+                pits += 1;
             } else {
-                state.policeAssignments[id] = tailers < 2 ? "tail" : "ram";
-                tailers++;
+                assignments[id] = tailers < 2 ? "tail" : "ram";
+                tailers += 1;
             }
+        }
+        state.policeAssignments = assignments;
+    }
+
+    /** Cops outside the view and furthest away are the ones that leave; they drive off instead of vanishing. */
+    function retireExcessPolice(targetPolice) {
+        let active = police.filter((agent) => !agent.leaving).length;
+        while (active > targetPolice) {
+            let pick = null;
+            let pickScore = -Infinity;
+            for (const agent of police) {
+                if (agent.leaving) continue;
+                const score = distanceTo(agent.x, agent.z) + (agent.los ? 0 : 60);
+                if (score > pickScore) {
+                    pickScore = score;
+                    pick = agent;
+                }
+            }
+            if (!pick) break;
+            pick.leaving = true;
+            active -= 1;
         }
     }
 
@@ -975,8 +1007,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const retiredAgents = [];
         state.wanted.emp = Math.max(0, state.wanted.emp - dt);
         const targetPolice = Math.max(0, heatTier.police - (state.wanted.emp > 0 ? 6 : 0));
-        while (police.length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
-        while (police.length > targetPolice && police.length > 0) removeMesh(police.pop().mesh);
+        while (police.filter((agent) => !agent.leaving).length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
+        retireExcessPolice(targetPolice);
 
         // Phase 5.3: re-assign roles periodically
         state.policeAssignmentTimer = (state.policeAssignmentTimer ?? 0) - dt;
@@ -1003,7 +1035,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const dx = state.player.x - agent.x;
             const dz = state.player.z - agent.z;
             const dist = Math.sqrt(dx * dx + dz * dz);
-            if (dist < 34 * visibilityFactor) near = true;
+            agent.losTimer = (agent.losTimer ?? 0) - dt;
+            if (agent.losTimer <= 0) {
+                agent.los = hasLineOfSight(world, agent.x, agent.z, state.player.x, state.player.z);
+                agent.losTimer = 0.2 + Math.random() * 0.1;
+            }
+            const unit = POLICE_UNITS[agent.unitType] ?? POLICE_UNITS.patrol;
+            // Cops only pursue what they can see (or hear within 10 m); hiding behind buildings works.
+            const sees = !agent.leaving && state.wanted.level > 0 && dist < CONFIG.police.searchDistance * visibilityFactor && (agent.los || dist < 10);
+            if (dist < 34 * visibilityFactor && sees) near = true;
             if (dist < 7 && Math.abs(state.player.speed) > 9 && agent.closeCooldown <= 0) {
                 agent.closeCooldown = 2.5;
                 state.stats.closeCalls += 1;
@@ -1017,12 +1057,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 addScore(45 + state.wanted.level * 12);
             }
 
-            if (dist < CONFIG.police.searchDistance * visibilityFactor && state.wanted.level > 0) {
+            if (agent.leaving) {
+                agent.state = "leave";
+            } else if (sees) {
                 agent.state = "chase";
                 agent.lastX = state.player.x;
                 agent.lastZ = state.player.z;
-            } else if (agent.state === "chase") {
+            } else if (agent.state === "chase" || agent.state === "leave") {
                 agent.state = "search";
+                agent.swarmTimer = 0;
             }
 
             // Phase 5.1: Time-to-Intercept prediction
@@ -1055,18 +1098,56 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 case "ram":
                     aheadOffset = -2; // slightly behind to ram from rear
                     break;
+                case "pit":
+                    // Aim for the rear quarter so the contact spins the player out.
+                    agent.pitSide = agent.pitSide ?? (Math.random() < 0.5 ? -1 : 1);
+                    aheadOffset = -2.4;
+                    flank = agent.pitSide * 1.5;
+                    break;
                 case "tail":
                     distanceHold = 8; // keep ~8m behind
                     aheadOffset = -distanceHold;
                     break;
             }
-            const targetX = baseTargetX + playerVxNorm * aheadOffset + playerSideX * flank;
-            const targetZ = baseTargetZ + playerVzNorm * aheadOffset + playerSideZ * flank;
+            let targetX = baseTargetX + playerVxNorm * aheadOffset + playerSideX * flank;
+            let targetZ = baseTargetZ + playerVzNorm * aheadOffset + playerSideZ * flank;
+            if (agent.state === "leave") {
+                targetX = agent.x + (agent.x - state.player.x);
+                targetZ = agent.z + (agent.z - state.player.z);
+                if (dist > 52 && !agent.los) retiredAgents.push(agent);
+            } else if (agent.state !== "chase") {
+                // Search: follow the street graph to the last known position, then fan out around it.
+                let goalX = agent.lastX;
+                let goalZ = agent.lastZ;
+                if (Math.hypot(agent.x - agent.lastX, agent.z - agent.lastZ) < 9) {
+                    agent.swarmTimer = (agent.swarmTimer ?? 0) - dt;
+                    if (agent.swarmTimer <= 0) {
+                        const hub = nearestNode(roadGraph, agent.lastX, agent.lastZ);
+                        const spot = hub.links[Math.floor(Math.random() * hub.links.length)] ?? hub;
+                        agent.swarmX = spot.x;
+                        agent.swarmZ = spot.z;
+                        agent.swarmTimer = 3.5;
+                    }
+                    goalX = agent.swarmX ?? goalX;
+                    goalZ = agent.swarmZ ?? goalZ;
+                }
+                agent.wpTimer = (agent.wpTimer ?? 0) - dt;
+                if (agent.wpTimer <= 0 || agent.wpGoalX !== goalX || agent.wpGoalZ !== goalZ) {
+                    const wp = nextWaypoint(roadGraph, agent.x, agent.z, goalX, goalZ);
+                    agent.wpX = wp.x;
+                    agent.wpZ = wp.z;
+                    agent.wpGoalX = goalX;
+                    agent.wpGoalZ = goalZ;
+                    agent.wpTimer = 0.35;
+                }
+                targetX = agent.wpX;
+                targetZ = agent.wpZ;
+            }
             const targetAngle = Math.atan2(targetX - agent.x, targetZ - agent.z);
             let diff = targetAngle - agent.rotation;
             while (diff > Math.PI) diff -= Math.PI * 2;
             while (diff < -Math.PI) diff += Math.PI * 2;
-            const turnRate = agent.unitType === "motorcycle" ? 3.2 : agent.unitType === "suv" ? 1.85 : agent.unitType === "van" ? 1.55 : 2.35;
+            const turnRate = unit.turnRate;
             agent.rotation += Math.sign(diff) * Math.min(Math.abs(diff), (turnRate + state.wanted.level * 0.2) * dt);
             agent.targetSpeed = getPoliceTargetSpeed(agent);
             agent.speed += (agent.targetSpeed - agent.speed) * dt * 2.4;
@@ -1104,7 +1185,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 } else {
                     agent.rotation += agent.unitType === "motorcycle" ? 2.6 : 1.6;
                 }
-                agent.speed *= agent.unitType === "suv" ? 0.78 : agent.unitType === "motorcycle" ? 0.62 : 0.7;
+                agent.speed *= unit.wallSpeedFactor;
             }
             agent.x = clamp(next.x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
             agent.z = clamp(next.z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
@@ -1153,7 +1234,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 const playerModel = CAR_MODELS[state.playerModelIndex];
                 const playerMass = playerModel.mass ?? 1.0;
                 const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
-                const agentMass = agent.unitType === "van" ? 1.9 : agent.unitType === "suv" ? 1.65 : agent.unitType === "motorcycle" ? 0.62 : 1.1;
+                const agentMass = unit.mass;
 
                 // Collision normal
                 const cdx = state.player.x - agent.x;
@@ -1172,17 +1253,23 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     const impulse = -(1 + restitution) * relVn / (1 / playerMass + 1 / agentMass);
                     state.player.vx += (impulse / playerMass) * cnx;
                     state.player.vz += (impulse / playerMass) * cnz;
-                    agent.speed *= agent.unitType === "motorcycle" ? 0.12 : 0.42;
+                    agent.speed *= unit.hitSpeedFactor;
 
                     // Phase 3.2: police-side collision yaw-kicks player
                     const playerFwdX = Math.sin(state.player.rotation);
                     const playerFwdZ = Math.cos(state.player.rotation);
                     const cross = playerFwdX * cnz - playerFwdZ * cnx;
                     state.player.rotation += cross * impulse * 0.020 / playerMass;
+
+                    // PIT manoeuvre: a rear-quarter hit at speed spins the player out.
+                    if (role === "pit" && agent.speed > 6 && playerSpeedMag > 6) {
+                        state.player.rotation += (agent.pitSide ?? 1) * 0.6;
+                        spawnPopup("PIT-Manöver!", "bounty");
+                    }
                 }
 
                 const impactSpeed = Math.abs(relVn);
-                const typeFactor = agent.unitType === "suv" ? 1.1 : agent.unitType === "van" ? 1.2 : agent.unitType === "motorcycle" ? 0.7 : 0.9;
+                const typeFactor = unit.damageFactor;
                 const armorLevel = state.upgrades.armor ?? 0;
                 const crashDamage = impactSpeed * typeFactor * (agentMass / playerMass) * 0.5 / (1 + armorLevel * 0.18);
                 if (crashDamage > 0.5) {
@@ -1949,9 +2036,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state: "search",
             lastX: state.player.x,
             lastZ: state.player.z,
-            role: unitType === "suv" ? "ram" : unitType === "motorcycle" ? "rapid" : unitType === "van" ? "blocker" : "direct",
-            side: Math.random() < 0.5 ? -1 : 1,
-            heavy: unitType === "suv" || unitType === "van",
+            leaving: false,
+            los: false,
             unitType,
             cooldown: 0,
             closeCooldown: 0,
@@ -2190,6 +2276,15 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             flushProfile();
             showGameOver(ui, state);
         }
+    }
+
+    /** A traffic crash raises heat only if a cop saw it, or on the third crash within 10 s. */
+    function registerTrafficCrash() {
+        const now = performance.now() / 1000;
+        crashLog.push(now);
+        while (crashLog.length && now - crashLog[0] > 10) crashLog.shift();
+        const witnessed = police.some((agent) => !agent.leaving && agent.los && distanceTo(agent.x, agent.z) < 45);
+        if (witnessed || crashLog.length >= 3) updateWanted(state.wanted.level + 1);
     }
 
     function updateWanted(level) {
@@ -3233,11 +3328,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function getPoliceTargetSpeed(agent) {
-        if (agent.state !== "chase") return agent.unitType === "motorcycle" ? 9.5 : 8;
-        if (agent.unitType === "motorcycle") return 13.5 + state.wanted.level * 1.35 + (state.time.phase === "night" ? 0.8 : 0);
-        if (agent.unitType === "suv") return 10.8 + state.wanted.level * 1.1;
-        if (agent.unitType === "van") return 9.2 + state.wanted.level * 0.85;
-        return 11.5 + state.wanted.level * 1.4 + (state.time.phase === "night" ? 0.8 : 0);
+        const unit = POLICE_UNITS[agent.unitType] ?? POLICE_UNITS.patrol;
+        if (agent.state === "leave") return unit.idleSpeed * 0.8;
+        if (agent.state !== "chase") return unit.idleSpeed;
+        const night = state.time.phase === "night" ? unit.nightBonus : 0;
+        return unit.chaseSpeed + state.wanted.level * unit.chaseSpeedPerHeat + night;
     }
 
     function getRoadblockPlacementTarget(options = {}) {
