@@ -1,15 +1,17 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, PAINTS, POLICE_UNITS, REPUTATION_GAINS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, PAINTS, REPUTATION_GAINS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
-import { clamp, distanceSq, turnToward, axisVelocity, axisYaw, wrapAngle } from "./util/math.js";
+import { clamp, distanceSq, axisYaw } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
-import { registerCombo, stepHeatDecay, tickCombo } from "./scoring.js";
+import { registerCombo, tickCombo } from "./scoring.js";
 import { reputationTier } from "./progression.js";
 import { createCameraSystem } from "./systems/camera.js";
+import { createPoliceSystem } from "./systems/police.js";
+import { createTrafficSystem } from "./systems/traffic.js";
 import { createRaceSystem } from "./systems/race.js";
 import { createTagSystem } from "./systems/tags.js";
 import { createWeatherSystem } from "./systems/weather.js";
-import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
+import { buildRoadGraph } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { SAVE_VERSION, clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
@@ -192,7 +194,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
         setMission(1);
         for (let index = 0; index < CONFIG.pickups.startCount; index += 1) spawnPickup();
-        for (let index = 0; index < CONFIG.traffic.startCount; index += 1) spawnTraffic();
+        for (let index = 0; index < CONFIG.traffic.startCount; index += 1) trafficSystem.spawn();
         weatherFx.apply();
         persistProfile();
         renderHud(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
@@ -234,8 +236,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         // Phase 7.1: wall-slide signal decays for audio
         if (state.wallSlide) state.wallSlide = Math.max(0, state.wallSlide - dt * 2.5);
 
-        updateTraffic(dt);
-        updatePolice(dt);
+        trafficSystem.update(dt);
+        policeSystem.update(dt);
         updatePlayer(dt, input);
         updatePassiveRegen(dt);
         updateMission(dt);
@@ -778,200 +780,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
-    function resolveTrafficSeparation() {
-        for (let i = 0; i < traffic.length; i++) {
-            const a = traffic[i];
-            for (let j = i + 1; j < traffic.length; j++) {
-                const b = traffic[j];
-                const dx = b.x - a.x;
-                const dz = b.z - a.z;
-                const d2 = dx * dx + dz * dz;
-                const minDist = (a.radius ?? 2.1) + (b.radius ?? 2.1);
-                if (d2 >= minDist * minDist || d2 < 0.0001) continue;
-
-                const dist = Math.sqrt(d2);
-                const nx = dx / dist;
-                const nz = dz / dist;
-                const overlap = minDist - dist;
-                const massA = a.model?.mass ?? 1.0;
-                const massB = b.model?.mass ?? 1.0;
-                const total = massA + massB;
-
-                a.x -= nx * overlap * (massB / total);
-                a.z -= nz * overlap * (massB / total);
-                b.x += nx * overlap * (massA / total);
-                b.z += nz * overlap * (massA / total);
-
-                const avx = a.axis === "x" ? a.speed * a.direction + a.pushVx : a.pushVx;
-                const avz = a.axis === "z" ? a.speed * a.direction + a.pushVz : a.pushVz;
-                const bvx = b.axis === "x" ? b.speed * b.direction + b.pushVx : b.pushVx;
-                const bvz = b.axis === "z" ? b.speed * b.direction + b.pushVz : b.pushVz;
-                const relVn = (bvx - avx) * nx + (bvz - avz) * nz;
-
-                if (relVn < 0) {
-                    const impulse = -0.55 * relVn;
-                    a.pushVx -= (impulse * nx) / massA;
-                    a.pushVz -= (impulse * nz) / massA;
-                    b.pushVx += (impulse * nx) / massB;
-                    b.pushVz += (impulse * nz) / massB;
-                    a.speed = Math.max(0, a.speed - Math.abs(relVn) * 0.35);
-                    b.speed = Math.max(0, b.speed - Math.abs(relVn) * 0.35);
-                }
-            }
-        }
-    }
-
-    function updateTraffic(dt) {
-        const playerModel = CAR_MODELS[state.playerModelIndex];
-        const playerMass = playerModel.mass ?? 1.0;
-        const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
-        const pushDecay = Math.max(0, 1 - dt * 5.5);
-
-        for (const car of traffic) {
-            car.cooldown = Math.max(0, car.cooldown - dt);
-            car.nearMissCooldown = Math.max(0, car.nearMissCooldown - dt);
-
-            // Recover speed toward natural cruise speed
-            if (car.speed < car.naturalSpeed) {
-                car.speed = Math.min(car.naturalSpeed, car.speed + dt * 2.2);
-            }
-
-            // Look-ahead braking: slow down when another car is directly ahead on same axis
-            const lookDist = 5.5 + car.speed * 0.45;
-            const lookX = car.axis === "x" ? car.x + car.direction * lookDist : car.x;
-            const lookZ = car.axis === "z" ? car.z + car.direction * lookDist : car.z;
-            for (const other of traffic) {
-                if (other === car) continue;
-                const ldx = other.x - lookX;
-                const ldz = other.z - lookZ;
-                if (ldx * ldx + ldz * ldz < 9) {
-                    car.speed = Math.max(0.4, car.speed - dt * 7.5);
-                    break;
-                }
-            }
-
-            // Decay transient push velocity
-            car.pushVx *= pushDecay;
-            car.pushVz *= pushDecay;
-
-            // Axis-direction movement + any push
-            const { vx: axisVx, vz: axisVz } = axisVelocity(car.axis, car.speed, car.direction);
-            car.x += (axisVx + car.pushVx) * dt;
-            car.z += (axisVz + car.pushVz) * dt;
-
-            // Building collision — traffic can be knocked into walls by player
-            const trafficPos = { x: car.x, z: car.z };
-            if (pushOutBuildings(world, trafficPos, car.radius ?? 2.1)) {
-                car.x = trafficPos.x;
-                car.z = trafficPos.z;
-                car.speed *= 0.55;
-                car.pushVx *= 0.3;
-                car.pushVz *= 0.3;
-            }
-
-            // Map wrap
-            if (car.x > CONFIG.map.size / 2 + 6) car.x = -CONFIG.map.size / 2 - 6;
-            if (car.x < -CONFIG.map.size / 2 - 6) car.x = CONFIG.map.size / 2 + 6;
-            if (car.z > CONFIG.map.size / 2 + 6) car.z = -CONFIG.map.size / 2 - 6;
-            if (car.z < -CONFIG.map.size / 2 - 6) car.z = CONFIG.map.size / 2 + 6;
-
-            car.mesh.position.set(car.x, 0.35, car.z);
-
-            // Smoothly rotate mesh to face actual velocity direction when pushed
-            const totalVx = axisVx + car.pushVx;
-            const totalVz = axisVz + car.pushVz;
-            const totalSpeed = Math.sqrt(totalVx * totalVx + totalVz * totalVz);
-            if (totalSpeed > 0.5) {
-                const targetAngle = Math.atan2(totalVx, totalVz);
-                car.mesh.rotation.y += wrapAngle(targetAngle - car.mesh.rotation.y) * Math.min(1, dt * 6.5);
-            }
-
-            if (car.headlights) {
-                const headlightIntensity = state.time.phase === "night" ? 0.85 : state.weather.mode === "fog" ? 0.55 : 0.2;
-                for (const light of car.headlights) light.material.emissiveIntensity = headlightIntensity;
-            }
-
-            const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
-
-            // Near-miss
-            if (distToPlayer > CONFIG.traffic.collisionRadius && distToPlayer < CONFIG.traffic.collisionRadius + 2.8 && playerSpeedMag > 8) {
-                if (car.nearMissCooldown <= 0) {
-                    car.nearMissCooldown = 2.2;
-                    triggerNearMiss();
-                }
-            }
-
-            // Player ↔ Traffic: impulse-based momentum exchange
-            if (distToPlayer < CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
-                car.cooldown = 0.75;
-                const trafficMass = car.model?.mass ?? 1.0;
-
-                // Collision normal pointing from traffic toward player
-                const dx = state.player.x - car.x;
-                const dz = state.player.z - car.z;
-                const dist = Math.sqrt(dx * dx + dz * dz) || 0.01;
-                const nx = dx / dist;
-                const nz = dz / dist;
-
-                // Full traffic velocity (axis + push)
-                const tvx = axisVx + car.pushVx;
-                const tvz = axisVz + car.pushVz;
-
-                // Relative velocity along normal
-                const relVn = (state.player.vx - tvx) * nx + (state.player.vz - tvz) * nz;
-
-                if (relVn < 0) {
-                    const restitution = 0.32;
-                    const impulse = -(1 + restitution) * relVn / (1 / playerMass + 1 / trafficMass);
-
-                    // Apply impulse to player
-                    state.player.vx += (impulse / playerMass) * nx;
-                    state.player.vz += (impulse / playerMass) * nz;
-
-                    // Phase 3.2: side-collision induces small yaw-kick so T-bones can spin the player
-                    const playerFwdX = Math.sin(state.player.rotation);
-                    const playerFwdZ = Math.cos(state.player.rotation);
-                    const cross = playerFwdX * nz - playerFwdZ * nx;
-                    state.player.rotation += cross * impulse * 0.018 / playerMass;
-
-                    // Apply impulse to traffic car as push velocity
-                    car.pushVx -= (impulse / trafficMass) * nx;
-                    car.pushVz -= (impulse / trafficMass) * nz;
-                    car.speed *= 0.72;
-
-                    // Separation push
-                    const overlap = CONFIG.traffic.collisionRadius - distToPlayer;
-                    const totalMass = playerMass + trafficMass;
-                    state.player.x += nx * overlap * (trafficMass / totalMass);
-                    state.player.z += nz * overlap * (trafficMass / totalMass);
-                    car.x -= nx * overlap * (playerMass / totalMass);
-                    car.z -= nz * overlap * (playerMass / totalMass);
-
-                    // Damage proportional to closing speed
-                    const impactSpeed = Math.abs(relVn);
-                    if (impactSpeed > 2.5) {
-                        // Phase 3.2: T-bone bonus damage on side hit
-                        const sideHit = Math.abs(cross) > 0.7 ? 1.35 : 1;
-                        const dmg = impactSpeed * 0.48 * (trafficMass / playerMass) * sideHit;
-                        damagePlayer(dmg, "crash");
-                        crashFx(impactSpeed / 14, { x: car.x, z: car.z });
-                        state.cameraShake = Math.min(0.85, impactSpeed * 0.045);
-                        spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
-                        registerTrafficCrash();
-                        state.cleanEscape && (state.cleanEscape.crashes = (state.cleanEscape.crashes ?? 0) + 1);
-                        state.mission && (state.mission.collisionCount = (state.mission.collisionCount ?? 0) + 1);
-                    }
-
-                    state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
-                    state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
-                }
-            }
-        }
-
-        // Resolve all traffic-traffic overlaps after movement
-        resolveTrafficSeparation();
-    }
-
     function updateScannerZones(dt) {
         if (!world.scannerZones?.length) return;
         let insideZone = null;
@@ -1000,405 +808,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             spawnParticle(insideZone.x, insideZone.z, insideZone.color ?? "#63c8ff", 16);
             setStatus(`Scanner-Treffer: ${insideZone.label} hebt Heat an.`, 1.6);
         }
-    }
-
-    function assignPoliceRoles() {
-        // Re-assigned every ~2 s so cops don't dogpile; rebuilt fresh so removed cops leave no entries.
-        const assignments = {};
-        let leftFlank = 0;
-        let rightFlank = 0;
-        let tailers = 0;
-        let pits = 0;
-        let pincers = 0;
-        for (const agent of police) {
-            const id = agent.id ?? (agent.id = `cop-${Math.random().toString(36).slice(2, 8)}`);
-            if (agent.unitType === "motorcycle") {
-                const role = leftFlank <= rightFlank ? "flank-left" : "flank-right";
-                assignments[id] = role;
-                if (role === "flank-left") leftFlank += 1;
-                else rightFlank += 1;
-            } else if (agent.unitType === "van") {
-                assignments[id] = "block-ahead";
-            } else if (agent.unitType === "suv") {
-                assignments[id] = "ram";
-            } else if (tailers < 1) {
-                assignments[id] = "tail";
-                tailers += 1;
-            } else if (state.wanted.level >= 3 && pits < 1) {
-                assignments[id] = "pit";
-                pits += 1;
-            } else if (state.wanted.level >= 3 && pincers < 2) {
-                // Two cars cut in from opposite sides at the next crossing ahead of the player.
-                assignments[id] = "pincer";
-                agent.pincerSide = pincers % 2 === 0 ? -1 : 1;
-                pincers += 1;
-            } else {
-                assignments[id] = tailers < 2 ? "tail" : "ram";
-                tailers += 1;
-            }
-        }
-        state.policeAssignments = assignments;
-    }
-
-    /** Cops outside the view and furthest away are the ones that leave; they drive off instead of vanishing. */
-    function retireExcessPolice(targetPolice) {
-        let active = police.filter((agent) => !agent.leaving).length;
-        while (active > targetPolice) {
-            let pick = null;
-            let pickScore = -Infinity;
-            for (const agent of police) {
-                if (agent.leaving) continue;
-                const score = distanceTo(agent.x, agent.z) + (agent.los ? 0 : 60);
-                if (score > pickScore) {
-                    pickScore = score;
-                    pick = agent;
-                }
-            }
-            if (!pick) break;
-            pick.leaving = true;
-            active -= 1;
-        }
-    }
-
-    function updatePolice(dt) {
-        const heatTier = getHeatTier();
-        const visibilityFactor = getPoliceVisibilityFactor();
-        const retiredAgents = [];
-        state.wanted.emp = Math.max(0, state.wanted.emp - dt);
-        const targetPolice = Math.max(0, heatTier.police - (state.wanted.emp > 0 ? 6 : 0));
-        while (police.filter((agent) => !agent.leaving).length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
-        retireExcessPolice(targetPolice);
-
-        // Phase 5.3: re-assign roles periodically
-        state.policeAssignmentTimer = (state.policeAssignmentTimer ?? 0) - dt;
-        if (state.policeAssignmentTimer <= 0) {
-            assignPoliceRoles();
-            state.policeAssignmentTimer = 2.0;
-        }
-
-        const playerVx = state.player.vx ?? 0;
-        const playerVz = state.player.vz ?? 0;
-        const playerSpeedMag = Math.hypot(playerVx, playerVz);
-        const playerVxNorm = playerSpeedMag > 0.5 ? playerVx / playerSpeedMag : Math.sin(state.player.rotation);
-        const playerVzNorm = playerSpeedMag > 0.5 ? playerVz / playerSpeedMag : Math.cos(state.player.rotation);
-        // Perpendicular to player velocity (left side)
-        const playerSideX = playerVzNorm;
-        const playerSideZ = -playerVxNorm;
-
-        let near = false;
-        for (const agent of police) {
-            agent.cooldown = Math.max(0, agent.cooldown - dt);
-            agent.closeCooldown = Math.max(0, agent.closeCooldown - dt);
-            agent.deployCooldown = Math.max(0, (agent.deployCooldown ?? 0) - dt);
-            agent.stuckTimer = agent.stuckTimer ?? 0;
-            const dx = state.player.x - agent.x;
-            const dz = state.player.z - agent.z;
-            const dist = Math.sqrt(dx * dx + dz * dz);
-            agent.losTimer = (agent.losTimer ?? 0) - dt;
-            if (agent.losTimer <= 0) {
-                agent.los = hasLineOfSight(world, agent.x, agent.z, state.player.x, state.player.z);
-                agent.losTimer = 0.2 + Math.random() * 0.1;
-            }
-            const unit = POLICE_UNITS[agent.unitType] ?? POLICE_UNITS.patrol;
-            // Cops only pursue what they can see (or hear within 10 m); hiding behind buildings works.
-            const sees = !agent.leaving && state.wanted.level > 0 && dist < CONFIG.police.searchDistance * visibilityFactor && (agent.los || dist < 10);
-            if (dist < 34 * visibilityFactor && sees) near = true;
-            if (dist < 7 && Math.abs(state.player.speed) > 9 && agent.closeCooldown <= 0) {
-                agent.closeCooldown = 2.5;
-                state.stats.closeCalls += 1;
-                state.lifetime.closeCalls += 1;
-                if (state.wanted.level >= 3) state.stats.highHeatCloseCalls += 1;
-                refreshProgress();
-                if (state.mission.type === "pursuit") {
-                    state.mission.progress += 1;
-                    if (state.mission.progress >= state.mission.target) completeMission();
-                }
-                addScore(45 + state.wanted.level * 12, false, "nearMiss");
-            }
-
-            if (agent.leaving) {
-                agent.state = "leave";
-            } else if (sees) {
-                agent.state = "chase";
-                agent.lastX = state.player.x;
-                agent.lastZ = state.player.z;
-            } else if (agent.state === "chase" || agent.state === "leave") {
-                agent.state = "search";
-                agent.swarmTimer = 0;
-            }
-
-            // Phase 5.1: Time-to-Intercept prediction
-            const role = state.policeAssignments?.[agent.id] ?? "tail";
-            const agentVx = Math.sin(agent.rotation) * agent.speed;
-            const agentVz = Math.cos(agent.rotation) * agent.speed;
-            // Closing rate along agent->player line
-            const toPlayerLen = Math.max(0.5, dist);
-            const toPlayerNx = dx / toPlayerLen;
-            const toPlayerNz = dz / toPlayerLen;
-            const copTowards = agentVx * toPlayerNx + agentVz * toPlayerNz;
-            const playerTowards = playerVx * toPlayerNx + playerVz * toPlayerNz; // positive = away from cop
-            const closing = Math.max(6, copTowards - playerTowards);
-            const ttI = Math.min(2.5, Math.max(0.3, toPlayerLen / closing));
-
-            const baseTargetX = agent.state === "chase" ? state.player.x + playerVx * ttI : agent.lastX;
-            const baseTargetZ = agent.state === "chase" ? state.player.z + playerVz * ttI : agent.lastZ;
-
-            // Phase 5.3: role-based offset
-            let flank = 0;
-            let aheadOffset = 0;
-            let distanceHold = 0;
-            switch (role) {
-                case "flank-left": flank = -6; break;
-                case "flank-right": flank = 6; break;
-                case "block-ahead":
-                    // Van: tries to get ahead of player along their travel vector
-                    aheadOffset = 18;
-                    break;
-                case "ram":
-                    aheadOffset = -2; // slightly behind to ram from rear
-                    break;
-                case "pit":
-                    // Aim for the rear quarter so the contact spins the player out.
-                    agent.pitSide = agent.pitSide ?? (Math.random() < 0.5 ? -1 : 1);
-                    aheadOffset = -2.4;
-                    flank = agent.pitSide * 1.5;
-                    break;
-                case "tail":
-                    distanceHold = 8; // keep ~8m behind
-                    aheadOffset = -distanceHold;
-                    break;
-            }
-            let targetX = baseTargetX + playerVxNorm * aheadOffset + playerSideX * flank;
-            let targetZ = baseTargetZ + playerVzNorm * aheadOffset + playerSideZ * flank;
-            if (role === "pincer" && agent.state === "chase" && dist > 14) {
-                const crossing = nearestNode(roadGraph, state.player.x + playerVxNorm * 22, state.player.z + playerVzNorm * 22);
-                targetX = crossing.x + playerSideX * (agent.pincerSide ?? 1) * 6;
-                targetZ = crossing.z + playerSideZ * (agent.pincerSide ?? 1) * 6;
-            }
-            if (agent.state === "leave") {
-                targetX = agent.x + (agent.x - state.player.x);
-                targetZ = agent.z + (agent.z - state.player.z);
-                if (dist > 52 && !agent.los) retiredAgents.push(agent);
-            } else if (agent.state !== "chase") {
-                // Search: follow the street graph to the last known position, then fan out around it.
-                let goalX = agent.lastX;
-                let goalZ = agent.lastZ;
-                if (Math.hypot(agent.x - agent.lastX, agent.z - agent.lastZ) < 9) {
-                    agent.swarmTimer = (agent.swarmTimer ?? 0) - dt;
-                    if (agent.swarmTimer <= 0) {
-                        const hub = nearestNode(roadGraph, agent.lastX, agent.lastZ);
-                        const spot = hub.links[Math.floor(Math.random() * hub.links.length)] ?? hub;
-                        agent.swarmX = spot.x;
-                        agent.swarmZ = spot.z;
-                        agent.swarmTimer = 3.5;
-                    }
-                    goalX = agent.swarmX ?? goalX;
-                    goalZ = agent.swarmZ ?? goalZ;
-                }
-                agent.wpTimer = (agent.wpTimer ?? 0) - dt;
-                if (agent.wpTimer <= 0 || agent.wpGoalX !== goalX || agent.wpGoalZ !== goalZ) {
-                    const wp = nextWaypoint(roadGraph, agent.x, agent.z, goalX, goalZ);
-                    agent.wpX = wp.x;
-                    agent.wpZ = wp.z;
-                    agent.wpGoalX = goalX;
-                    agent.wpGoalZ = goalZ;
-                    agent.wpTimer = 0.35;
-                }
-                targetX = agent.wpX;
-                targetZ = agent.wpZ;
-            }
-            agent.rotation = turnToward(agent.rotation, agent.x, agent.z, targetX, targetZ, (unit.turnRate + state.wanted.level * 0.2) * dt);
-            agent.targetSpeed = getPoliceTargetSpeed(agent);
-            agent.speed += (agent.targetSpeed - agent.speed) * dt * 2.4;
-
-            const preX = agent.x + Math.sin(agent.rotation) * agent.speed * dt;
-            const preZ = agent.z + Math.cos(agent.rotation) * agent.speed * dt;
-            const next = { x: preX, z: preZ };
-            const wallHit = pushOutBuildings(world, next, 1.25);
-            const obstacleHit = obstacleAt(world, next.x, next.z, 1.15);
-            if (wallHit || obstacleHit) {
-                // Phase 5.2: project velocity along wall tangent instead of fixed-angle snap
-                const dispX = next.x - preX;
-                const dispZ = next.z - preZ;
-                const dispLen = Math.hypot(dispX, dispZ);
-                if (dispLen > 0.001) {
-                    const wnx = dispX / dispLen;
-                    const wnz = dispZ / dispLen;
-                    const vAxisX = Math.sin(agent.rotation);
-                    const vAxisZ = Math.cos(agent.rotation);
-                    const velDotN = vAxisX * wnx + vAxisZ * wnz;
-                    if (velDotN < 0) {
-                        // Tangent direction
-                        const tx = vAxisX - velDotN * wnx;
-                        const tz = vAxisZ - velDotN * wnz;
-                        const tlen = Math.hypot(tx, tz);
-                        if (tlen > 0.01) {
-                            // Interp rotation toward tangent direction
-                            const newAngle = Math.atan2(tx / tlen, tz / tlen);
-                            agent.rotation += wrapAngle(newAngle - agent.rotation) * 0.6;
-                        }
-                    }
-                } else {
-                    agent.rotation += agent.unitType === "motorcycle" ? 2.6 : 1.6;
-                }
-                agent.speed *= unit.wallSpeedFactor;
-            }
-            agent.x = clamp(next.x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
-            agent.z = clamp(next.z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
-
-            // Phase 5.2: stuck-recovery
-            if (Math.abs(agent.speed) < 1.2) {
-                agent.stuckTimer += dt;
-                if (agent.stuckTimer > 0.6) {
-                    agent.rotation += (Math.random() - 0.5) * 1.8;
-                    agent.speed = -Math.abs(agent.targetSpeed) * 0.4;
-                    agent.stuckTimer = 0;
-                }
-            } else {
-                agent.stuckTimer = 0;
-            }
-
-            agent.mesh.position.set(agent.x, 0.37, agent.z);
-            agent.mesh.rotation.y = agent.rotation;
-
-            if (agent.unitType === "van" && agent.state === "chase" && dist < 34 && state.roadblockCooldown <= 0 && agent.deployCooldown <= 0) {
-                spawnRoadblock({ sourceAgent: agent, tactical: true });
-                agent.deployCooldown = 10;
-            }
-
-            // Police scatters nearby traffic cars out of the way
-            for (const car of traffic) {
-                const tdx = car.x - agent.x;
-                const tdz = car.z - agent.z;
-                const td2 = tdx * tdx + tdz * tdz;
-                const tMin = (car.radius ?? 2.1) + 1.3;
-                if (td2 < tMin * tMin && td2 > 0.01) {
-                    const tdist = Math.sqrt(td2);
-                    const tnx = tdx / tdist;
-                    const tnz = tdz / tdist;
-                    const tOverlap = tMin - tdist;
-                    car.x += tnx * tOverlap * 0.55;
-                    car.z += tnz * tOverlap * 0.55;
-                    const pushStr = Math.min(tOverlap * 3.8, 7);
-                    car.pushVx += tnx * pushStr;
-                    car.pushVz += tnz * pushStr;
-                }
-            }
-
-            if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < CONFIG.police.collisionRadius * CONFIG.police.collisionRadius && agent.cooldown <= 0) {
-                agent.cooldown = 0.9;
-                const playerModel = CAR_MODELS[state.playerModelIndex];
-                const playerMass = playerModel.mass ?? 1.0;
-                const playerSpeedMag = state.player.speedMag ?? Math.abs(state.player.speed);
-                const agentMass = unit.mass;
-
-                // Collision normal
-                const cdx = state.player.x - agent.x;
-                const cdz = state.player.z - agent.z;
-                const cdist = Math.sqrt(cdx * cdx + cdz * cdz) || 0.01;
-                const cnx = cdx / cdist;
-                const cnz = cdz / cdist;
-
-                // Police velocity in world space
-                const policeVx = Math.sin(agent.rotation) * agent.speed;
-                const policeVz = Math.cos(agent.rotation) * agent.speed;
-                const relVn = (state.player.vx - policeVx) * cnx + (state.player.vz - policeVz) * cnz;
-
-                if (relVn < 0) {
-                    const restitution = 0.28;
-                    const impulse = -(1 + restitution) * relVn / (1 / playerMass + 1 / agentMass);
-                    state.player.vx += (impulse / playerMass) * cnx;
-                    state.player.vz += (impulse / playerMass) * cnz;
-                    agent.speed *= unit.hitSpeedFactor;
-
-                    // Phase 3.2: police-side collision yaw-kicks player
-                    const playerFwdX = Math.sin(state.player.rotation);
-                    const playerFwdZ = Math.cos(state.player.rotation);
-                    const cross = playerFwdX * cnz - playerFwdZ * cnx;
-                    state.player.rotation += cross * impulse * 0.020 / playerMass;
-
-                    // PIT manoeuvre: a rear-quarter hit at speed spins the player out.
-                    if (role === "pit" && agent.speed > 6 && playerSpeedMag > 6) {
-                        state.player.rotation += (agent.pitSide ?? 1) * 0.6;
-                        spawnPopup("PIT-Manöver!", "bounty");
-                    }
-                }
-
-                const impactSpeed = Math.abs(relVn);
-                const typeFactor = unit.damageFactor;
-                const armorLevel = state.upgrades.armor ?? 0;
-                const crashDamage = impactSpeed * typeFactor * (agentMass / playerMass) * 0.5 / (1 + armorLevel * 0.18);
-                if (crashDamage > 0.5) {
-                    damagePlayer(crashDamage, "crash");
-                    crashFx(impactSpeed / 14, { x: agent.x, z: agent.z });
-                    state.cameraShake = Math.min(0.9, impactSpeed * 0.05);
-                    spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
-                    state.cleanEscape && (state.cleanEscape.crashes = (state.cleanEscape.crashes ?? 0) + 1);
-                }
-
-                state.player.speed = Math.sin(state.player.rotation) * state.player.vx + Math.cos(state.player.rotation) * state.player.vz;
-                state.player.speedMag = Math.sqrt(state.player.vx ** 2 + state.player.vz ** 2);
-
-                // Phase 3.2 + 6.2: only heavier cars can knock out motorcycles at higher speed; reward player
-                if (agent.unitType === "motorcycle" && playerSpeedMag > 10 && playerMass >= 1.2 && state.wanted.level >= 2) {
-                    retiredAgents.push(agent);
-                    const bounty = 30 + state.wanted.level * 15;
-                    addCash(bounty);
-                    addScore(80 + state.wanted.level * 25);
-                    spawnPopup(`BOUNTY +$${bounty}`, "bounty");
-                    setStatus(`Motorrad-Einheit ausgeschaltet. Kopfgeld +$${bounty}.`, 1.6);
-                } else if (agent.unitType === "motorcycle" && playerSpeedMag > 14) {
-                    retiredAgents.push(agent);
-                    setStatus("Motorrad-Einheit ausgeschaltet.", 1.2);
-                }
-            }
-        }
-
-        for (const agent of retiredAgents) {
-            const agentIndex = police.indexOf(agent);
-            if (agentIndex >= 0) {
-                removeMesh(agent.mesh);
-                police.splice(agentIndex, 1);
-            }
-        }
-
-        if (state.wanted.level > 0 && !near) {
-            // Phase 5.4: decay delay scales with heat level
-            const decayStep = stepHeatDecay({
-                decay: state.wanted.decay,
-                dt,
-                level: state.wanted.level,
-                covered: isInEscapeCover(state.player.x, state.player.z),
-                baseDelay: CONFIG.police.decayDelay,
-            });
-            state.wanted.decay = decayStep.decay;
-            // Mini-pursuit wave during decay at heat >= 3
-            state.miniPursuitTimer = (state.miniPursuitTimer ?? 0) + dt;
-            if (state.wanted.level >= 3 && state.miniPursuitTimer > 5 && Math.random() < 0.1) {
-                state.miniPursuitTimer = 0;
-                if (police.length < CONFIG.police.maxCount) {
-                    spawnPolice(true, "motorcycle");
-                }
-            }
-            if (decayStep.drop) updateWanted(state.wanted.level - 1);
-        } else {
-            state.wanted.decay = 0;
-            state.miniPursuitTimer = 0;
-        }
-
-        state.wanted.status = state.wanted.level <= 0 ? "CLEAR" : near ? "CHASE" : "SEARCH";
-
-        let nearestDist = Infinity;
-        let nearestAgent = null;
-        for (const agent of police) {
-            const d = distanceTo(agent.x, agent.z);
-            if (d < nearestDist) {
-                nearestDist = d;
-                nearestAgent = agent;
-            }
-        }
-        state.nearestPoliceDistance = nearestDist;
-        state.nearestPoliceOffset = nearestAgent ? { x: nearestAgent.x - state.player.x, z: nearestAgent.z - state.player.z } : null;
     }
 
     function updateRoadblocks(dt) {
@@ -1610,6 +1019,20 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state, scene, world, audio, sharedMaterials, roadGraph,
         getDistrictAt, getDistrictWaypointRoute, distanceTo, removeMesh,
         addCash, addReputation, addScore, refreshProgress, setStatus, spawnPopup, updateWanted,
+    });
+
+    const trafficSystem = createTrafficSystem({
+        traffic, state, world, scene, sharedMaterials,
+        triggerNearMiss, damagePlayer, crashFx, spawnParticle, registerTrafficCrash, addAmbientHeadlights,
+    });
+    // Events and the boss mission place their convoys on the same districts' streets.
+    const getDistrictTrafficStreets = trafficSystem.streets;
+    const getDistrictTrafficPosition = trafficSystem.position;
+    const policeSystem = createPoliceSystem({
+        police, traffic, state, world, scene, sharedMaterials, roadGraph,
+        distanceTo, getHeatTier, refreshProgress, completeMission, addScore, addCash, spawnRoadblock,
+        spawnPopup, damagePlayer, crashFx, spawnParticle, setStatus, removeMesh, isInEscapeCover, updateWanted,
+        isScannerActive: () => Boolean(activeScannerZoneId),
     });
 
     function updateDistrict() {
@@ -1892,57 +1315,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         effects.updateRain(dt);
     }
 
-    function spawnTraffic() {
-        const district = chooseTrafficDistrict();
-        const model = createTrafficModelForDistrict(district);
-        const mesh = createCar(model, sharedMaterials, { taxi: model.name === "Taxi" });
-        const axis = Math.random() < 0.5 ? "x" : "z";
-        const streetOptions = getDistrictTrafficStreets(axis, district);
-        const street = streetOptions[Math.floor(Math.random() * streetOptions.length)];
-        const pos = getDistrictTrafficPosition(axis, district);
-        const direction = Math.random() < 0.5 ? -1 : 1;
-        const x = axis === "x" ? pos : street;
-        const z = axis === "z" ? pos : street;
-        mesh.position.set(x, 0.35, z);
-        mesh.rotation.y = axisYaw(axis, direction);
-        const headlights = addAmbientHeadlights(mesh, model);
-        scene.add(mesh);
-        const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
-        const naturalSpeed = baseSpeed + Math.random() * 3.2;
-        const carRadius = ((model.length ?? 4.2) * 0.42 + (model.width ?? 2.0) * 0.5) * 0.5;
-        traffic.push({ mesh, x, z, axis, direction, speed: naturalSpeed, naturalSpeed, pushVx: 0, pushVz: 0, radius: carRadius, model, cooldown: 0, nearMissCooldown: 0, districtId: district.id, headlights });
-    }
-
-    function chooseTrafficDistrict() {
-        const totalWeight = DISTRICTS.reduce((sum, district) => sum + (district.traffic ?? 1), 0);
-        let roll = Math.random() * totalWeight;
-        for (const district of DISTRICTS) {
-            roll -= district.traffic ?? 1;
-            if (roll <= 0) return district;
-        }
-        return DISTRICTS[DISTRICTS.length - 1];
-    }
-
-    function createTrafficModelForDistrict(district) {
-        if (district.id === "downtown") {
-            if (Math.random() < 0.38) return { ...CAR_MODELS[1], name: "Taxi", color: "#ffc23e", trim: "#181511" };
-            return Math.random() < 0.5 ? CAR_MODELS[0] : CAR_MODELS[2];
-        }
-        if (district.id === "industrial") {
-            return Math.random() < 0.65
-                ? { ...CAR_MODELS[3], name: "Service Van", color: "#d39157", trim: "#2a2219" }
-                : { ...CAR_MODELS[1], name: "Yard Hauler", color: "#c4b09a", trim: "#29251e" };
-        }
-        if (district.id === "harbor") {
-            return Math.random() < 0.5
-                ? { ...CAR_MODELS[3], color: "#6f8ea5", trim: "#1a2128", name: "Dock Truck", width: 2.34, length: 5.1 }
-                : { ...CAR_MODELS[0], color: "#4d6e84", trim: "#162129", name: "Harbor Shuttle" };
-        }
-        return Math.random() < 0.7
-            ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Service" }
-            : { ...CAR_MODELS[2], color: "#b8e2ff", trim: "#11354a", name: "Cycle Lane" };
-    }
-
     function chooseSpawnDistrict(kind) {
         const focusChance = kind === "event" ? 0.68 : 0.58;
         if (Math.random() < focusChance) return state.district ?? DISTRICTS[0];
@@ -1989,59 +1361,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (roll <= 0) return key;
         }
         return entries[0]?.[0] ?? "cash";
-    }
-
-    function getDistrictTrafficStreets(axis, district) {
-        const options = CONFIG.map.streets.filter((street) => {
-            if (axis === "x") return district.z < 0 ? street <= 0 : street >= 0;
-            return district.x < 0 ? street <= 0 : street >= 0;
-        });
-        return options.length > 0 ? options : CONFIG.map.streets;
-    }
-
-    function getDistrictTrafficPosition(axis, district) {
-        const limit = CONFIG.map.size * 0.46;
-        if (axis === "x") {
-            return district.x < 0
-                ? -Math.random() * limit
-                : Math.random() * limit;
-        }
-        return district.z < 0
-            ? -Math.random() * limit
-            : Math.random() * limit;
-    }
-
-    function spawnPolice(near = true, forcedUnitType = null) {
-        if (police.length >= CONFIG.police.maxCount) return;
-        const unitType = forcedUnitType ?? pickPoliceUnitType();
-        const model = createPoliceUnitModel(unitType);
-        const mesh = createCar(model, sharedMaterials, { police: true });
-        const angle = Math.random() * Math.PI * 2;
-        const dist = near ? CONFIG.police.spawnDistance + Math.random() * 28 : CONFIG.map.size * 0.45;
-        let x = state.player.x + Math.cos(angle) * dist;
-        let z = state.player.z + Math.sin(angle) * dist;
-        x = clamp(snapStreet(x), -CONFIG.map.size / 2, CONFIG.map.size / 2);
-        z = clamp(snapStreet(z), -CONFIG.map.size / 2, CONFIG.map.size / 2);
-        mesh.position.set(x, 0.37, z);
-        mesh.rotation.y = Math.random() * Math.PI * 2;
-        scene.add(mesh);
-        police.push({
-            mesh,
-            x,
-            z,
-            rotation: mesh.rotation.y,
-            speed: 6,
-            targetSpeed: 9,
-            state: "search",
-            lastX: state.player.x,
-            lastZ: state.player.z,
-            leaving: false,
-            los: false,
-            unitType,
-            cooldown: 0,
-            closeCooldown: 0,
-            deployCooldown: unitType === "van" ? 3 : 0,
-        });
     }
 
     function spawnRoadblock(options = {}) {
@@ -3079,47 +2398,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function distanceTo(x, z) {
         return Math.sqrt(distanceSq(state.player.x, state.player.z, x, z));
     }
-    function getPoliceVisibilityFactor() {
-        let factor = 1;
-        if (state.time.phase === "night") factor += 0.14;
-        if (state.weather.mode === "fog") factor -= 0.34;
-        if (state.weather.mode === "storm") factor -= 0.16;
-        if (isInEscapeCover(state.player.x, state.player.z)) factor -= 0.16;
-        if (activeScannerZoneId) factor += 0.12;
-        if (state.helicopter.active && distanceSq(state.player.x, state.player.z, state.helicopter.x, state.helicopter.z) < 15 * 15) factor += 0.22;
-        return clamp(factor, 0.55, 1.45);
-    }
-
-    function pickPoliceUnitType() {
-        const heat = state.wanted.level;
-        const roll = Math.random();
-        if (heat >= 4 && roll < 0.24) return "van";
-        if (heat >= 3 && roll < 0.52) return "suv";
-        if (heat >= 2 && roll < 0.78) return "motorcycle";
-        return "patrol";
-    }
-
-    function createPoliceUnitModel(unitType) {
-        if (unitType === "suv") {
-            return { ...CAR_MODELS[1], color: "#e9eef4", trim: "#182a46", name: "Pursuit SUV", maxSpeed: 16.8, acceleration: 22, turn: 2.95 };
-        }
-        if (unitType === "motorcycle") {
-            return { ...CAR_MODELS[2], color: "#f4f7fb", trim: "#18324f", name: "Interceptor Bike", width: 0.96, length: 2.75, height: 0.42, maxSpeed: 22, acceleration: 28, turn: 4.8, roof: "sport" };
-        }
-        if (unitType === "van") {
-            return { ...CAR_MODELS[3], color: "#d9e1eb", trim: "#1a2b45", name: "Blockade Van", maxSpeed: 14.8, acceleration: 18.5, turn: 2.45 };
-        }
-        return { ...CAR_MODELS[0], color: "#f4f7fb", trim: "#1c4274", name: "Patrol Cruiser", maxSpeed: 19.2, acceleration: 24, turn: 3.4 };
-    }
-
-    function getPoliceTargetSpeed(agent) {
-        const unit = POLICE_UNITS[agent.unitType] ?? POLICE_UNITS.patrol;
-        if (agent.state === "leave") return unit.idleSpeed * 0.8;
-        if (agent.state !== "chase") return unit.idleSpeed;
-        const night = state.time.phase === "night" ? unit.nightBonus : 0;
-        return unit.chaseSpeed + state.wanted.level * unit.chaseSpeedPerHeat + night;
-    }
-
     function getRoadblockPlacementTarget(options = {}) {
         const missionTarget = getMissionNavigationTarget();
         if (options.sourceAgent) {
@@ -3184,17 +2462,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (isInEscapeCover(state.player.x, state.player.z)) return 0.62;
         if (state.player.inShortcut) return 0.82;
         return 1;
-    }
-
-    function scrambleNearbyPolice(x, z, radius = 24) {
-        const radiusSq = radius * radius;
-        for (const agent of police) {
-            if (distanceSq(x, z, agent.x, agent.z) >= radiusSq) continue;
-            agent.state = "search";
-            agent.lastX = x + (Math.random() - 0.5) * 8;
-            agent.lastZ = z + (Math.random() - 0.5) * 8;
-            agent.speed *= 0.78;
-        }
     }
 
     function addAmbientHeadlights(mesh, model, color = "#fff6a8") {
@@ -3288,7 +2555,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (obstacle.type === "fence") {
             spawnFenceGapDebris(obstacle);
             if (state.wanted.level > 0) {
-                scrambleNearbyPolice(obstacle.x, obstacle.z, 26);
+                policeSystem.scramble(obstacle.x, obstacle.z, 26);
                 state.wanted.decay += 1.4;
                 setStatus("Zaun durchbrochen. Sichtlinie kurz gestört.", 1.4);
             }
@@ -3431,6 +2698,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         setPaint: setPaintById,
         resetProfile,
         // Dev-only handles for in-browser checks.
-        debug: import.meta.env?.DEV ? { startRace: raceSystem.start, tags: tagSystem.tags } : null,
+        debug: import.meta.env?.DEV ? { startRace: raceSystem.start, tags: tagSystem.tags, traffic, police } : null,
     };
 }

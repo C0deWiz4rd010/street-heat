@@ -10,6 +10,8 @@ main.js            verdrahtet Renderer, Welt, Runtime, Input, Settings, Audio un
  ├─ world.js       Karte (seeded), Instancing, Räumliches Gitter, Wasser, Tag/Nacht-Visuals der Welt
  ├─ systems.js     Spiellogik in einer Closure: createGameRuntime(...)
  │   ├─ systems/camera.js   Folgekamera, Heat-Zoom, Shake
+ │   ├─ systems/traffic.js  Verkehr: Spawning je Bezirk, Achsenfahrt, Trennung, Beinahe-Treffer
+ │   ├─ systems/police.js   Polizei: Rollen, Straßenverfolgung, Sichtlinie, Abgang, Kollisionen
  │   ├─ systems/weather.js  Tag/Nacht, Wetterfarben und -licht, Blitze, Dampf
  │   ├─ systems/tags.js     Graffiti-Tags
  │   └─ systems/race.js     illegales Straßenrennen
@@ -50,7 +52,7 @@ raceSystem.update(dt);
 
 Helferfunktionen (`addScore`, `setStatus`, `spawnPopup` …) sind Funktionsdeklarationen in der Runtime und stehen deshalb schon vor ihrer Textstelle zur Verfügung. Nach jedem Auslagern prüft ein Test-Run, dass nichts fehlt (Import-Check per Parser, Browser-Lauf, `npm test`).
 
-Noch in `systems.js`: Spieler-Update, Polizei, Verkehr, Missionen, Pickups, Events, Garage und Economy-Aktionen. Sie sind die nächsten Kandidaten, in dieser Reihenfolge von der Kopplung her: Verkehr, Polizei, Missionen, Spieler.
+Noch in `systems.js`: Spieler-Update, Missionen, Pickups, Events, Garage und Economy-Aktionen. Nächste Kandidaten von der Kopplung her: Missionen, dann Spieler. `traffic` und `police` sind weiter Arrays der Runtime, die Kamera, Minimap und Audio mitlesen; die Systeme bekommen sie hineingereicht.
 
 ## Fixer Takt und Reihenfolge pro Frame
 
