@@ -54,6 +54,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const hazardGeo = new THREE.BoxGeometry(4.8, 0.08, 0.7);
     markShared(pickupGeo, eventGeo, hazardGeo);
     const tempTarget = new THREE.Vector3();
+    const cameraBase = new THREE.Vector3();
+    let cameraBaseReady = false;
     const debugClock = { frames: 0, timer: 0 };
     let scannerCharge = 0;
     let activeScannerZoneId = null;
@@ -1585,6 +1587,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             const targetZ = Math.sin(t) * orbitR;
             tempTarget.set(targetX, 42, targetZ);
             camera.position.lerp(tempTarget, 1 - Math.exp(-1.2 * dt));
+            cameraBase.copy(camera.position);
+            cameraBaseReady = true;
             camera.lookAt(0, 0, 0);
             const targetFov = CONFIG.camera.fovBase;
             camera.fov += (targetFov - camera.fov) * (1 - Math.exp(-2 * dt));
@@ -1618,7 +1622,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const turnInputMag = Math.abs((state.lastTurnInput ?? 0));
         const driftFactor = Math.min(1, (player.drift ?? 0));
         const kPos = 4.0 + speedRatio * 3.5 + driftFactor * 1.2 + turnInputMag * 0.8;
-        camera.position.lerp(tempTarget, 1 - Math.exp(-kPos * dt));
+        // The smoothed base position never receives the shake offset, so shake cannot feed back into the lerp.
+        if (!cameraBaseReady) {
+            cameraBase.copy(camera.position);
+            cameraBaseReady = true;
+        }
+        cameraBase.lerp(tempTarget, 1 - Math.exp(-kPos * dt));
+        camera.position.copy(cameraBase);
+        post.setSpeed(speedRatio);
 
         // Phase 4: Shake-Profile (impact + engine + drift composite)
         const engineShake = speedRatio > 0.9 ? (speedRatio - 0.9) * 0.6 : 0;
@@ -1647,6 +1658,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             0,
             player.z + forwardZ * lookAheadFwd + latZ * lookAheadLat
         );
+        if (composite > 0.01) {
+            camera.rotateZ(Math.sin(performance.now() * 0.13) * composite * 0.018);
+        }
     }
 
     function spawnPickup() {
@@ -2146,6 +2160,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function spawnParticle(x, z, color, count) {
         effects.spawnDebris(x, z, color, count);
+        if (count >= 14) effects.spawnSparks(x, z, Math.round(count * 1.4));
     }
 
     function updateParticles(dt) {
@@ -3067,6 +3082,53 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return light;
     });
 
+    const flameMaterial = new THREE.MeshBasicMaterial({
+        color: new THREE.Color(0.5, 1.8, 3.2),
+        transparent: true,
+        opacity: 0.9,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+    });
+    const flameGeometry = new THREE.ConeGeometry(0.16, 1, 8).rotateX(-Math.PI / 2);
+    const flames = [-1, 1].map((side) => {
+        const flame = new THREE.Mesh(flameGeometry, flameMaterial);
+        flame.visible = false;
+        flame.userData.side = side;
+        playerCar.add(flame);
+        return flame;
+    });
+    let trailTimer = 0;
+
+    function updateNitroFlame(dt) {
+        const model = playerCar.userData.model;
+        const on = Boolean(state.player.nitroActive) && state.screen === "playing";
+        const flicker = 0.75 + Math.random() * 0.5;
+        for (const flame of flames) {
+            flame.visible = on;
+            if (!on) continue;
+            flame.position.set(flame.userData.side * model.width * 0.3, -0.05, -model.length / 2 - 0.45 * flicker);
+            flame.scale.set(1, 1, 1.4 * flicker);
+            flame.rotation.y = Math.PI;
+        }
+        if (on) {
+            trailTimer -= dt;
+            if (trailTimer <= 0) {
+                trailTimer = 0.035;
+                const p = state.player;
+                effects.spawnSmoke(p.x - Math.sin(p.rotation) * 2.4, p.z - Math.cos(p.rotation) * 2.4, {
+                    color: "#4fc3ff",
+                    additive: true,
+                    alpha: 0.5,
+                    size: 1.1,
+                    grow: 0.8,
+                    life: 0.35,
+                    rise: 0.1,
+                    y: 0.4,
+                });
+            }
+        }
+    }
+
     /** Wheel spin, steering, body roll/pitch, brake lights, lightbars and the shared police glow. */
     function updateVehicleVisuals(dt) {
         const player = state.player;
@@ -3080,6 +3142,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             night: Math.min(1, night + (state.weather.mode === "fog" ? 0.5 : 0)),
             tilt: true,
         });
+        updateNitroFlame(dt);
         for (const car of traffic) {
             const dir = car.speed ?? 0;
             updateCarVisuals(car.mesh, dt, { speed: dir, braking: car.speed < (car.naturalSpeed ?? 0) * 0.6 });

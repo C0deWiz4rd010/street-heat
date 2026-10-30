@@ -5,7 +5,7 @@ import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js
 import { createMaterial } from "./vehicles.js";
 
 const WORLD_SEED = 0x57ee7;
-const NEON_COLORS = [[3.2, 0.45, 1.7], [0.5, 2.6, 3.2], [1.9, 0.8, 3.4]];
+const NEON_COLORS = [[1.7, 0.18, 0.95], [0.15, 1.3, 1.7], [0.95, 0.35, 1.8]];
 const LAMP_TINTS = { downtown: "#ff7ad9", industrial: "#ff9a3c", park: "#ffd9a0", harbor: "#7fc4ff" };
 
 function mulberry32(seed) {
@@ -236,7 +236,7 @@ export function createWorld(scene, sharedMaterials) {
         visualTime += dt;
         waterBump.offset.set(visualTime * 0.012, visualTime * 0.02);
         handles.windowMaterial.color.copy(WINDOW_DAY).lerp(WINDOW_NIGHT, night);
-        const neon = 0.8 + night * 1.2;
+        const neon = 0.08 + night * 1.5;
         handles.neonMaterial.color.setRGB(neon, neon, neon);
         for (let i = 0; i < 2; i += 1) {
             const pulse = Math.sin(visualTime * 3.2 + i * Math.PI) > 0.2 ? 1 : 0.12;

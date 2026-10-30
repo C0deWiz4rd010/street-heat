@@ -27,6 +27,8 @@ const GRADE_SHADER = {
         tDiffuse: { value: null },
         uVignette: { value: 0.32 },
         uAberration: { value: 0 },
+        uSpeed: { value: 0 },
+        uTime: { value: 0 },
         uSaturation: { value: 1.08 },
         uLift: { value: new THREE.Color(0, 0, 0) },
         uGain: { value: new THREE.Color(1, 1, 1) },
@@ -42,6 +44,8 @@ const GRADE_SHADER = {
         uniform sampler2D tDiffuse;
         uniform float uVignette;
         uniform float uAberration;
+        uniform float uSpeed;
+        uniform float uTime;
         uniform float uSaturation;
         uniform vec3 uLift;
         uniform vec3 uGain;
@@ -60,6 +64,13 @@ const GRADE_SHADER = {
             col = mix(vec3(luma), col, uSaturation);
             float vig = smoothstep(0.82, 0.18, dist * (1.0 + uVignette));
             col *= mix(1.0 - uVignette, 1.0, vig);
+            if (uSpeed > 0.01) {
+                float angle = atan(fromCenter.y, fromCenter.x);
+                float cell = floor(angle * 70.0);
+                float h = fract(sin(cell * 91.7 + floor(uTime * 14.0) * 17.3) * 43758.5453);
+                float streak = step(0.86, h) * smoothstep(0.28, 0.62, dist) * uSpeed;
+                col += vec3(0.55, 0.7, 1.0) * streak * 0.35;
+            }
             gl_FragColor = vec4(max(col, 0.0), 1.0);
         }
     `,
@@ -156,6 +167,8 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
     let bloomTarget = [0.3, 0.55, 0.95];
     let nitroBlend = 0;
     let lightning = 0;
+    let speedTarget = 0;
+    let speedBlend = 0;
     const shadowStep = (SHADOW_HALF_EXTENT * 2) / 2048;
 
     function applyQuality() {
@@ -216,6 +229,10 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         SUN_OFFSET.set(-40 + 85 * day, 30 + 28 * day, -32);
     }
 
+    function setSpeed(ratio) {
+        speedTarget = ratio;
+    }
+
     function flashLightning(amount) {
         lightning = Math.max(lightning, amount);
     }
@@ -239,6 +256,9 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         const nitro = player?.nitroActive ? 1 : 0;
         nitroBlend += (nitro - nitroBlend) * (1 - Math.exp(-dt * 6));
         grade.uAberration.value = nitroBlend * 0.014;
+        speedBlend += (speedTarget - speedBlend) * (1 - Math.exp(-dt * 4));
+        grade.uSpeed.value = Math.max(0, (speedBlend - 0.6) / 0.4);
+        grade.uTime.value += dt;
 
         lightning = Math.max(0, lightning - dt * 2.4);
         bloomPass.strength += (bloomTarget[0] + lightning * 0.5 - bloomPass.strength) * k;
@@ -283,6 +303,7 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         getQualityConfig: () => QUALITY_LEVELS[quality],
         setAtmosphere,
         setDaylight,
+        setSpeed,
         flashLightning,
     };
 }

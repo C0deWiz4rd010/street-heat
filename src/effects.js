@@ -4,7 +4,8 @@ const SKID_CAPACITY = 600;
 const SKID_LIFE = 16;
 const SKID_FADE = 4;
 const DEBRIS_CAPACITY = 512;
-const SMOKE_CAPACITY = 48;
+const SMOKE_CAPACITY = 64;
+const SPARK_CAPACITY = 320;
 const RAIN_CAPACITY = 120;
 
 const dummy = new THREE.Object3D();
@@ -25,6 +26,20 @@ export function disposeObject(object) {
             if (!material.userData.shared) material.dispose();
         }
     });
+}
+
+function createPuffTexture() {
+    const canvas = document.createElement("canvas");
+    canvas.width = 64;
+    canvas.height = 64;
+    const context = canvas.getContext("2d");
+    const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+    gradient.addColorStop(0, "rgba(255,255,255,1)");
+    gradient.addColorStop(0.4, "rgba(255,255,255,0.45)");
+    gradient.addColorStop(1, "rgba(255,255,255,0)");
+    context.fillStyle = gradient;
+    context.fillRect(0, 0, 64, 64);
+    return new THREE.CanvasTexture(canvas);
 }
 
 function createInstanced(scene, geometry, material, capacity) {
@@ -53,16 +68,37 @@ export function createEffects(scene) {
     debrisMesh.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(DEBRIS_CAPACITY * 3), 3);
     const debris = [];
 
-    // Smoke: small fixed pool, every puff owns a material so it can fade.
-    const smokeGeometry = new THREE.SphereGeometry(0.3, 6, 6);
+    // Smoke / glow puffs: soft radial sprites, every puff owns a SpriteMaterial so it can fade.
+    const puffTexture = createPuffTexture();
     const smokePool = Array.from({ length: SMOKE_CAPACITY }, () => {
-        const material = new THREE.MeshStandardMaterial({ color: "#c8cdd6", roughness: 1, transparent: true, opacity: 0 });
-        const mesh = new THREE.Mesh(smokeGeometry, material);
+        const material = new THREE.SpriteMaterial({ map: puffTexture, color: "#c8cdd6", transparent: true, opacity: 0, depthWrite: false });
+        const mesh = new THREE.Sprite(material);
         mesh.visible = false;
         scene.add(mesh);
-        return { mesh, active: false, vx: 0, vy: 0, vz: 0, life: 0, age: 0, size: 1 };
+        return { mesh, active: false, vx: 0, vy: 0, vz: 0, life: 0, age: 0, size: 1, alpha: 0.3, grow: 1.8 };
     });
     let smokeCursor = 0;
+
+    // Sparks: additive points with per-vertex colour, gravity and a floor bounce.
+    const sparkPositions = new Float32Array(SPARK_CAPACITY * 3);
+    const sparkColors = new Float32Array(SPARK_CAPACITY * 3);
+    const sparkGeometry = new THREE.BufferGeometry();
+    sparkGeometry.setAttribute("position", new THREE.BufferAttribute(sparkPositions, 3).setUsage(THREE.DynamicDrawUsage));
+    sparkGeometry.setAttribute("color", new THREE.BufferAttribute(sparkColors, 3).setUsage(THREE.DynamicDrawUsage));
+    const sparkMaterial = new THREE.PointsMaterial({
+        size: 0.32,
+        vertexColors: true,
+        map: puffTexture,
+        transparent: true,
+        blending: THREE.AdditiveBlending,
+        depthWrite: false,
+        fog: false,
+    });
+    const sparkPoints = new THREE.Points(sparkGeometry, sparkMaterial);
+    sparkPoints.frustumCulled = false;
+    sparkGeometry.setDrawRange(0, 0);
+    scene.add(sparkPoints);
+    const sparks = [];
 
     // Rain: one instanced mesh with shared material.
     const rainGeometry = new THREE.BoxGeometry(0.035, 1.1, 0.035);
@@ -120,8 +156,12 @@ export function createEffects(scene) {
                 vx: (Math.random() - 0.5) * 10,
                 vy: 3 + Math.random() * 7,
                 vz: (Math.random() - 0.5) * 10,
-                life: 0.45 + Math.random() * 0.7,
+                life: 0.8 + Math.random() * 0.9,
                 age: 0,
+                rx: Math.random() * 6,
+                ry: Math.random() * 6,
+                spinX: (Math.random() - 0.5) * 14,
+                spinY: (Math.random() - 0.5) * 14,
                 r: tempColor.r,
                 g: tempColor.g,
                 b: tempColor.b,
@@ -129,20 +169,44 @@ export function createEffects(scene) {
         }
     }
 
-    function spawnSmoke(x, z) {
+    function spawnSmoke(x, z, options = {}) {
         const puff = smokePool[smokeCursor];
         smokeCursor = (smokeCursor + 1) % SMOKE_CAPACITY;
         puff.active = true;
-        puff.vx = (Math.random() - 0.5) * 1.4;
-        puff.vy = 0.8 + Math.random() * 0.7;
-        puff.vz = (Math.random() - 0.5) * 1.4;
-        puff.life = 0.6 + Math.random() * 0.5;
+        puff.vx = (Math.random() - 0.5) * 1.4 + (options.vx ?? 0);
+        puff.vy = (options.rise ?? 0.8) + Math.random() * 0.7;
+        puff.vz = (Math.random() - 0.5) * 1.4 + (options.vz ?? 0);
+        puff.life = (options.life ?? 0.7) + Math.random() * 0.5;
         puff.age = 0;
-        puff.size = 0.7 + Math.random() * 0.6;
-        puff.mesh.position.set(x, 0.28, z);
+        puff.size = (options.size ?? 1.5) * (0.7 + Math.random() * 0.6);
+        puff.alpha = options.alpha ?? 0.3;
+        puff.grow = options.grow ?? 1.8;
+        const material = puff.mesh.material;
+        material.color.set(options.color ?? "#c8cdd6");
+        material.blending = options.additive ? THREE.AdditiveBlending : THREE.NormalBlending;
+        material.opacity = puff.alpha;
+        puff.mesh.position.set(x, options.y ?? 0.3, z);
         puff.mesh.scale.setScalar(puff.size);
-        puff.mesh.material.opacity = 0.28;
         puff.mesh.visible = true;
+    }
+
+    function spawnSparks(x, z, count, y = 0.5) {
+        for (let index = 0; index < count; index += 1) {
+            if (sparks.length >= SPARK_CAPACITY) sparks.shift();
+            const angle = Math.random() * Math.PI * 2;
+            const speed = 3 + Math.random() * 8;
+            sparks.push({
+                x,
+                y: y + Math.random() * 0.5,
+                z,
+                vx: Math.cos(angle) * speed,
+                vy: 2 + Math.random() * 5,
+                vz: Math.sin(angle) * speed,
+                age: 0,
+                life: 0.35 + Math.random() * 0.45,
+                hot: Math.random(),
+            });
+        }
     }
 
     function updateParticles(dt) {
@@ -154,13 +218,23 @@ export function createEffects(scene) {
                 debris.splice(index, 1);
                 continue;
             }
-            particle.vy -= 12 * dt;
+            particle.vy -= 14 * dt;
             particle.x += particle.vx * dt;
             particle.y += particle.vy * dt;
             particle.z += particle.vz * dt;
-            const scale = 1 - particle.age / particle.life;
+            if (particle.y < 0.16 && particle.vy < 0) {
+                particle.y = 0.16;
+                particle.vy *= -0.45;
+                particle.vx *= 0.7;
+                particle.vz *= 0.7;
+                particle.spinX *= 0.5;
+                particle.spinY *= 0.5;
+            }
+            particle.rx += particle.spinX * dt;
+            particle.ry += particle.spinY * dt;
+            const scale = Math.min(1, (1 - particle.age / particle.life) * 3);
             dummy.position.set(particle.x, particle.y, particle.z);
-            dummy.rotation.set(0, 0, 0);
+            dummy.rotation.set(particle.rx, particle.ry, 0);
             dummy.scale.setScalar(scale);
             dummy.updateMatrix();
             debrisMesh.setMatrixAt(count, dummy.matrix);
@@ -185,9 +259,40 @@ export function createEffects(scene) {
             puff.mesh.position.x += puff.vx * dt;
             puff.mesh.position.y += puff.vy * dt;
             puff.mesh.position.z += puff.vz * dt;
-            puff.mesh.scale.setScalar(puff.size * (1 + t * 1.8));
-            puff.mesh.material.opacity = 0.28 * (1 - t);
+            puff.mesh.scale.setScalar(puff.size * (1 + t * puff.grow));
+            puff.mesh.material.opacity = puff.alpha * (1 - t);
         }
+
+        let sparkCount = 0;
+        for (let index = sparks.length - 1; index >= 0; index -= 1) {
+            const spark = sparks[index];
+            spark.age += dt;
+            if (spark.age >= spark.life) {
+                sparks.splice(index, 1);
+                continue;
+            }
+            spark.vy -= 16 * dt;
+            spark.x += spark.vx * dt;
+            spark.y += spark.vy * dt;
+            spark.z += spark.vz * dt;
+            if (spark.y < 0.14 && spark.vy < 0) {
+                spark.y = 0.14;
+                spark.vy *= -0.4;
+            }
+            const fade = 1 - spark.age / spark.life;
+            const o = sparkCount * 3;
+            sparkPositions[o] = spark.x;
+            sparkPositions[o + 1] = spark.y;
+            sparkPositions[o + 2] = spark.z;
+            // HDR-ish colours so the bloom pass catches them: white-hot fading to orange.
+            sparkColors[o] = 2.6 * fade + 0.4;
+            sparkColors[o + 1] = (0.9 + spark.hot * 1.4) * fade;
+            sparkColors[o + 2] = spark.hot * 0.5 * fade * fade;
+            sparkCount += 1;
+        }
+        sparkGeometry.setDrawRange(0, sparkCount);
+        sparkGeometry.attributes.position.needsUpdate = true;
+        sparkGeometry.attributes.color.needsUpdate = true;
     }
 
     function spawnRain(x, z) {
@@ -227,6 +332,8 @@ export function createEffects(scene) {
         debrisMesh.count = 0;
         rain.length = 0;
         rainMesh.count = 0;
+        sparks.length = 0;
+        sparkGeometry.setDrawRange(0, 0);
         for (const puff of smokePool) {
             puff.active = false;
             puff.mesh.visible = false;
@@ -238,6 +345,7 @@ export function createEffects(scene) {
         updateSkids,
         spawnDebris,
         spawnSmoke,
+        spawnSparks,
         updateParticles,
         spawnRain,
         updateRain,

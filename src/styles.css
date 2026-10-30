@@ -1075,3 +1075,7 @@ canvas.game-canvas {
         width: 100vw;
     }
 }
+
+#speedLines {
+    display: none;
+}
