@@ -10,6 +10,10 @@ export function createDefaultProfile(carModels, upgrades) {
         unlockedCars: [firstCar],
         upgrades: Object.fromEntries(Object.keys(upgrades).map((id) => [id, 0])),
         achievements: [],
+        reputation: { downtown: 0, industrial: 0, park: 0, harbor: 0 },
+        tags: [],
+        unlocks: [],
+        contract: null,
         lifetime: {
             missions: 0,
             pickups: 0,
@@ -45,6 +49,15 @@ export function loadProfile(carModels, upgrades) {
                 })),
             },
             achievements: Array.isArray(parsed.achievements) ? parsed.achievements : [],
+            reputation: {
+                ...fallback.reputation,
+                ...Object.fromEntries(Object.entries(parsed.reputation ?? {}).map(([key, value]) => [key, Math.max(0, Number(value) || 0)])),
+            },
+            tags: Array.isArray(parsed.tags) ? parsed.tags.filter((id) => typeof id === "string") : [],
+            unlocks: Array.isArray(parsed.unlocks) ? parsed.unlocks.filter((id) => typeof id === "string") : [],
+            contract: parsed.contract && typeof parsed.contract.id === "string"
+                ? { id: parsed.contract.id, progress: Number(parsed.contract.progress) || 0, claimed: Boolean(parsed.contract.claimed) }
+                : null,
             lifetime: {
                 ...fallback.lifetime,
                 ...Object.fromEntries(Object.entries(parsed.lifetime ?? {}).map(([key, value]) => [key, Number(value) || 0])),

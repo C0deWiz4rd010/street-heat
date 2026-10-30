@@ -1,6 +1,7 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, POLICE_UNITS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, DISTRICT_CONTRACTS, POLICE_UNITS, RACE, REPUTATION_GAINS, REPUTATION_TIERS, TAGS_PER_DISTRICT, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
+import { generateTags, reputationTier } from "./progression.js";
 import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
@@ -128,10 +129,21 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.stats.newRecord = false;
         state.stats.unlocked = [];
         state.stats.breakdown = { drift: 0, nearMiss: 0, pickups: 0, props: 0, missions: 0, events: 0, escape: 0, other: 0 };
-        state.contract.id = CONTRACTS[Math.floor(Math.random() * CONTRACTS.length)].id;
-        state.contract.progress = 0;
+        state.stats.tagsRun = 0;
+        // An unclaimed contract carries its progress into the next run (and across reloads).
+        const previousContract = CONTRACTS.find((item) => item.id === state.contract.id);
+        const stillValid = previousContract && !state.contract.claimed && isContractAvailable(previousContract);
+        if (stillValid) {
+            state.contract.base = state.contract.progress;
+        } else {
+            const pool = CONTRACTS.filter(isContractAvailable);
+            state.contract.id = pool[Math.floor(Math.random() * pool.length)].id;
+            state.contract.base = 0;
+            state.contract.progress = 0;
+            state.contract.claimed = false;
+        }
         state.contract.completed = false;
-        state.contract.claimed = false;
+        endRace(true);
         state.helicopter.active = false;
         state.helicopter.pressure = 0;
         state.helicopter.cooldown = 0;
@@ -227,6 +239,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         updateTimeOfDay(dt);
         updateWeather(dt);
         updateWorldEvents(dt);
+        updateRace(dt);
+        updateTags(dt);
         updatePickups(dt);
         updateRoadblocks(dt);
         updateHazards(dt);
@@ -696,6 +710,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             updateWanted(Math.max(0, state.wanted.level - 2));
         }
         state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 30);
+        addReputation(state.mission.districtId, state.mission.isBoss ? REPUTATION_GAINS.boss : REPUTATION_GAINS.mission);
         state.stats.missions += 1;
         state.lifetime.missions += 1;
         if (state.wanted.level <= 2) state.stats.missionsLowHeat += 1;
@@ -1415,6 +1430,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function updateHazards(dt) {
         for (let index = hazards.length - 1; index >= 0; index -= 1) {
             const hazard = hazards[index];
+            if (hazard.warn > 0) {
+                // Announced on the minimap first; the strip becomes real once the warning ends.
+                hazard.warn -= dt;
+                if (hazard.warn <= 0) hazard.mesh.visible = true;
+                continue;
+            }
             hazard.life -= dt;
             hazard.mesh.material.opacity = Math.max(0.18, hazard.life / hazard.maxLife);
             if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
@@ -1572,11 +1593,201 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
+    // ---- Graffiti tags: 10 per district, picked up by driving close. -------------------------------
+    const tagDefs = generateTags({
+        buildings: world.buildings,
+        districtIds: DISTRICTS.map((district) => district.id),
+        districtIdOf: (x, z) => getDistrictAt(x, z).id,
+        perDistrict: TAGS_PER_DISTRICT,
+    });
+    const tagGeometry = new THREE.PlaneGeometry(2.4, 1.5).rotateX(-Math.PI / 2);
+    const tagMaterials = Object.fromEntries(DISTRICTS.map((district) => [
+        district.id,
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(district.color).multiplyScalar(2.2), side: THREE.DoubleSide, transparent: true, opacity: 0.9 }),
+    ]));
+    const tags = tagDefs.map((def, index) => {
+        const mesh = new THREE.Mesh(tagGeometry, tagMaterials[def.districtId]);
+        mesh.position.set(def.x, def.y, def.z);
+        mesh.rotation.y = (index * 1.7) % Math.PI;
+        scene.add(mesh);
+        return { ...def, mesh, collected: state.tags.includes(def.id) };
+    });
+    for (const tag of tags) tag.mesh.visible = !tag.collected;
+    world.tags = tags;
+
+    function updateTags(dt) {
+        const pulse = 0.7 + 0.3 * Math.sin(performance.now() / 280);
+        for (const material of Object.values(tagMaterials)) material.opacity = 0.55 + 0.4 * pulse;
+        for (const tag of tags) {
+            if (tag.collected) continue;
+            tag.mesh.position.y = tag.y + (tag.roof ? Math.sin(performance.now() / 500 + tag.x) * 0.12 : 0);
+            if (distanceSq(state.player.x, state.player.z, tag.x, tag.z) > 4.2 * 4.2) continue;
+            tag.collected = true;
+            tag.mesh.visible = false;
+            state.tags.push(tag.id);
+            state.stats.tagsRun += 1;
+            const district = DISTRICTS.find((entry) => entry.id === tag.districtId);
+            const owned = tags.filter((entry) => entry.districtId === tag.districtId && entry.collected).length;
+            addScore(150, false, "other");
+            const cash = addCash(40);
+            addReputation(tag.districtId, REPUTATION_GAINS.tag);
+            spawnParticle(tag.x, tag.z, district?.color ?? "#ffffff", 14);
+            setStatus(`Graffiti-Tag ${owned}/${TAGS_PER_DISTRICT} in ${district?.name}. +$${cash}`, 1.8);
+            if (owned === TAGS_PER_DISTRICT) {
+                addCash(500);
+                addReputation(tag.districtId, REPUTATION_GAINS.tagSet);
+                spawnPopup(`${district?.name.toUpperCase()} KOMPLETT`, "bounty");
+                setStatus(`Alle Tags in ${district?.name} gesprüht! Bonus +$500.`, 3.5);
+            }
+            refreshProgress();
+        }
+    }
+
+    // ---- Street race: start ring -> 4 checkpoints against 2 AI rivals. -------------------------------
+    const raceMarker = new THREE.Mesh(
+        new THREE.TorusGeometry(RACE.radius * 0.8, 0.28, 10, 36).rotateX(Math.PI / 2),
+        new THREE.MeshBasicMaterial({ color: new THREE.Color(0.5, 2.4, 1.2), transparent: true, opacity: 0.85 })
+    );
+    raceMarker.visible = false;
+    scene.add(raceMarker);
+
+    function startRace(event) {
+        const district = getDistrictAt(event.x, event.z);
+        const checkpoints = getDistrictWaypointRoute(district.id, RACE.checkpoints, state.mission.stage + 2);
+        const hub = nearestNode(roadGraph, event.x, event.z);
+        const racers = [];
+        for (let index = 0; index < RACE.rivals; index += 1) {
+            const model = { ...CAR_MODELS[index % 2 === 0 ? 2 : 0], name: "Rivale", color: index === 0 ? "#79ffb3" : "#ff7ad9", trim: "#14181e" };
+            const mesh = createCar(model, sharedMaterials, { bodyColor: model.color, trimColor: model.trim });
+            const x = hub.x + (index === 0 ? -2.4 : 2.4);
+            const z = hub.z + 3;
+            mesh.position.set(x, 0.37, z);
+            scene.add(mesh);
+            racers.push({
+                mesh, x, z, rotation: 0, speed: 0, index: 0, finished: false,
+                cruise: RACE.rivalSpeed + index * 0.7 + Math.min(4, state.mission.stage * 0.25),
+                wpTimer: 0, wpX: x, wpZ: z,
+            });
+        }
+        state.race = { active: true, checkpoints, racers, player: { index: 0 }, order: [], timer: RACE.timeLimit, districtId: district.id };
+        updateWanted(state.wanted.level + 1);
+        raceMarker.visible = true;
+        spawnPopup("RENNEN!", "bounty");
+        setStatus(`Illegales Rennen in ${district.name}: ${RACE.checkpoints} Checkpoints, ${RACE.rivals} Rivalen. Sei Erster!`, 3.5);
+        audio?.mission?.();
+    }
+
+    function racePlaceNow() {
+        const race = state.race;
+        const cp = race.checkpoints[race.player.index];
+        const mine = race.player.index;
+        const myDist = cp ? distanceTo(cp.x, cp.z) : 0;
+        let place = 1;
+        for (const racer of race.racers) {
+            if (racer.finished) {
+                place += 1;
+                continue;
+            }
+            const target = race.checkpoints[racer.index];
+            const theirDist = target ? Math.hypot(target.x - racer.x, target.z - racer.z) : 0;
+            if (racer.index > mine || (racer.index === mine && theirDist < myDist)) place += 1;
+        }
+        return place;
+    }
+
+    function updateRace(dt) {
+        const race = state.race;
+        if (!race?.active) return;
+        race.timer -= dt;
+        const total = race.checkpoints.length;
+
+        const next = race.checkpoints[race.player.index];
+        if (next) {
+            raceMarker.position.set(next.x, 0.5, next.z);
+            raceMarker.rotation.y += dt * 1.5;
+            if (distanceTo(next.x, next.z) < RACE.radius) {
+                race.player.index += 1;
+                audio?.nearMiss?.();
+                if (race.player.index >= total) {
+                    endRace(false, race.racers.filter((racer) => racer.finished).length + 1);
+                    return;
+                }
+                setStatus(`Checkpoint ${race.player.index}/${total} | Platz ${racePlaceNow()}/${race.racers.length + 1}`, 1.4);
+            }
+        }
+
+        for (const racer of race.racers) {
+            if (racer.finished) continue;
+            const cp = race.checkpoints[racer.index];
+            racer.wpTimer -= dt;
+            if (racer.wpTimer <= 0) {
+                const wp = nextWaypoint(roadGraph, racer.x, racer.z, cp.x, cp.z);
+                racer.wpX = wp.x;
+                racer.wpZ = wp.z;
+                racer.wpTimer = 0.3;
+            }
+            const targetAngle = Math.atan2(racer.wpX - racer.x, racer.wpZ - racer.z);
+            let diff = targetAngle - racer.rotation;
+            while (diff > Math.PI) diff -= Math.PI * 2;
+            while (diff < -Math.PI) diff += Math.PI * 2;
+            racer.rotation += Math.sign(diff) * Math.min(Math.abs(diff), 2.8 * dt);
+            // Rubber band: rivals ease off when far ahead and push when the player is close behind.
+            const lead = racer.index - race.player.index;
+            const speedTarget = racer.cruise * (Math.abs(diff) > 0.9 ? 0.55 : 1) * (lead > 0 ? 0.92 : lead < 0 ? 1.08 : 1);
+            racer.speed += (speedTarget - racer.speed) * dt * 2.2;
+            const moved = { x: racer.x + Math.sin(racer.rotation) * racer.speed * dt, z: racer.z + Math.cos(racer.rotation) * racer.speed * dt };
+            if (pushOutBuildings(world, moved, 1.25)) {
+                racer.speed *= 0.6;
+                racer.rotation += 0.9 * Math.sign(diff || 1);
+            }
+            racer.x = clamp(moved.x, -CONFIG.map.size / 2, CONFIG.map.size / 2);
+            racer.z = clamp(moved.z, -CONFIG.map.size / 2, CONFIG.map.size / 2);
+            racer.mesh.position.set(racer.x, 0.37, racer.z);
+            racer.mesh.rotation.y = racer.rotation;
+            updateCarVisuals(racer.mesh, dt, { speed: racer.speed });
+            if (Math.hypot(cp.x - racer.x, cp.z - racer.z) < RACE.radius + 2) {
+                racer.index += 1;
+                if (racer.index >= total) {
+                    racer.finished = true;
+                    race.order.push(racer);
+                    setStatus("Ein Rivale ist im Ziel!", 1.4);
+                }
+            }
+        }
+
+        if (race.timer <= 0) endRace(false, 0);
+    }
+
+    /** place: 1..n finished, 0 = out of time. `silent` just tears the race down (reset). */
+    function endRace(silent, place = 0) {
+        const race = state.race;
+        if (!race) return;
+        for (const racer of race.racers) removeMesh(racer.mesh);
+        raceMarker.visible = false;
+        state.race = null;
+        if (silent) return;
+        const payout = RACE.payouts[place - 1];
+        if (!payout) {
+            setStatus(place === 0 ? "Rennen verloren: Zeit abgelaufen." : "Rennen beendet ohne Platzierung.", 2.6);
+            return;
+        }
+        addScore(payout.score, true, "events");
+        const cash = addCash(payout.cash);
+        addReputation(race.districtId, payout.rep);
+        state.stats.events += 1;
+        state.lifetime.events += 1;
+        refreshProgress();
+        spawnPopup(`PLATZ ${place}!`, "bounty");
+        setStatus(`Rennen: Platz ${place} von ${race.racers.length + 1}. Preisgeld +$${cash}.`, 3.2);
+        audio?.mission?.();
+    }
+
     function updateDistrict() {
         const nextDistrict = getDistrictAt(state.player.x, state.player.z);
         if (nextDistrict.id !== state.district.id) {
             state.district = nextDistrict;
-            setStatus(`${nextDistrict.name}: Bezirksbonus ${nextDistrict.bonus}.`, 1.7);
+            const tier = reputationTier(state.reputation[nextDistrict.id] ?? 0);
+            setStatus(`${nextDistrict.name}: Bezirksbonus ${nextDistrict.bonus}. Ruf: ${tier.tier.name}.`, 1.9);
         }
     }
 
@@ -1651,7 +1862,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (let index = eventPickups.length - 1; index >= 0; index -= 1) {
             const event = eventPickups[index];
             event.life -= dt;
-            if (event.kind === "convoy" || event.kind === "race") {
+            if (event.kind === "convoy") {
                 advanceEventMover(event, dt);
             } else {
                 event.mesh.rotation.y += dt * 1.8;
@@ -1660,7 +1871,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.worldEvent.timer = Math.max(0, event.life);
             state.worldEvent.x = event.x;
             state.worldEvent.z = event.z;
+            if (event.kind === "race" && distanceSq(state.player.x, state.player.z, event.x, event.z) < (event.collectRadius ?? 13) ** 2) {
+                if (!state.race?.active) startRace(event);
+                removeWorldEvent(index);
+                continue;
+            }
             if (distanceSq(state.player.x, state.player.z, event.x, event.z) < (event.collectRadius ?? 13) ** 2) {
+                addReputation(event.districtId, REPUTATION_GAINS.event);
                 addScore(event.score, true, "events");
                 const cashGain = addCash(event.cash || 0);
                 if (event.heal) state.player.health = Math.min(getMaxHealth(), state.player.health + event.heal);
@@ -1837,10 +2054,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             heat: (event.heat || 0) + (district.eventHeatBonus ?? 0),
             life,
             maxLife: life,
-            collectRadius: event.kind === "convoy" || event.kind === "race" ? 6.2 : 13,
+            collectRadius: event.kind === "convoy" ? 6.2 : 13,
         };
 
-        if (event.kind === "convoy" || event.kind === "race") {
+        if (event.kind === "convoy") {
             const axis = Math.random() < 0.5 ? "x" : "z";
             const direction = Math.random() < 0.5 ? -1 : 1;
             const streetOptions = getDistrictTrafficStreets(axis, district);
@@ -2136,8 +2353,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         mesh.position.set(x, 0.16, z);
         mesh.rotation.y = Math.abs(forwardX) > Math.abs(forwardZ) ? Math.PI / 2 : 0;
         scene.add(mesh);
-        hazards.push({ mesh, x, z, radius: 3.2, life: 12, maxLife: 12 });
-        setStatus("Dispatch: Spike-Strip gelegt.", 1.7);
+        mesh.visible = false;
+        hazards.push({ mesh, x, z, radius: 3.2, life: 12, maxLife: 12, warn: 2.4, kind: "spike" });
+        setStatus("Warnung: Spike-Strip voraus! Siehe Minimap.", 2.2);
     }
 
     function createRoadblockMesh(axis) {
@@ -2364,9 +2582,29 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return gained;
     }
 
+    /** Adds district reputation and announces tier-ups (with their unlock) once. */
+    function addReputation(districtId, amount) {
+        if (!districtId || amount <= 0) return;
+        const before = reputationTier(state.reputation[districtId] ?? 0).index;
+        state.reputation[districtId] = (state.reputation[districtId] ?? 0) + amount;
+        const after = reputationTier(state.reputation[districtId]);
+        if (after.index > before) {
+            const name = DISTRICTS.find((district) => district.id === districtId)?.name ?? districtId;
+            const unlock = after.tier.unlock;
+            if (unlock && !state.unlocks.includes(unlock)) state.unlocks.push(unlock);
+            setStatus(`Ruf in ${name}: ${after.tier.name}! ${unlock ? `Freigeschaltet: ${unlock}.` : ""}`, 4);
+            spawnPopup(`RUF: ${after.tier.name.toUpperCase()}`, "bounty");
+            audio?.upgrade?.();
+        }
+        persistProfile();
+    }
+
     function addCash(amount) {
         if (!amount) return 0;
         let multiplier = state.screen === "playing" ? state.district?.cashMultiplier ?? 1 : 1;
+        if (state.screen === "playing" && state.district) {
+            multiplier *= 1 + reputationTier(state.reputation[state.district.id] ?? 0).tier.cashBonus;
+        }
         // Phase 6.1: provoke cash boost on pickups
         if ((state.provoke?.active ?? 0) > 0) multiplier *= 1.5;
         const gained = Math.round(amount * multiplier);
@@ -2433,9 +2671,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return HEAT_TIERS[clamp(state.wanted.level, 0, HEAT_TIERS.length - 1)];
     }
 
+    function isContractAvailable(contract) {
+        return !contract.district || reputationTier(state.reputation[contract.district] ?? 0).index >= 2;
+    }
+
     function refreshProgress() {
         const contract = CONTRACTS.find((item) => item.id === state.contract.id) ?? CONTRACTS[0];
-        state.contract.progress = Math.min(contract.target, getRunMetric(contract.metric));
+        state.contract.progress = Math.min(contract.target, (state.contract.base ?? 0) + getRunMetric(contract.metric));
         if (!state.contract.claimed && state.contract.progress >= contract.target) {
             state.contract.completed = true;
             state.contract.claimed = true;
@@ -2590,6 +2832,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             unlockedCars: [...state.unlockedCars],
             upgrades: { ...state.upgrades },
             achievements: [...state.achievements],
+            reputation: { ...state.reputation },
+            tags: [...state.tags],
+            unlocks: [...state.unlocks],
+            contract: { id: state.contract.id, progress: state.contract.progress, claimed: state.contract.claimed },
             lifetime: { ...state.lifetime },
         };
         state.bestScore = state.profile.bestScore;
@@ -3504,5 +3750,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         buyUpgrade,
         buyOrSelectCar,
         resetProfile,
+        // Dev-only handles for in-browser checks.
+        debug: import.meta.env?.DEV ? { startRace, tags } : null,
     };
 }

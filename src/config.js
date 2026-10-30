@@ -67,6 +67,30 @@ export const COMBO_TIERS = [
     { chain: 32, name: "Legendary" },
 ];
 
+export const REPUTATION_TIERS = [
+    { name: "Unbekannt", at: 0, cashBonus: 0, unlock: null },
+    { name: "Bekannt", at: 120, cashBonus: 0.05, unlock: "Lackfarbe Neon-Pink" },
+    { name: "Respektiert", at: 320, cashBonus: 0.1, unlock: "Bezirks-Contract" },
+    { name: "Straßenlegende", at: 700, cashBonus: 0.15, unlock: "Lackfarbe Chrom" },
+    { name: "Bezirkskönig", at: 1400, cashBonus: 0.2, unlock: "Kosmetik Unterboden-Neon" },
+];
+
+export const REPUTATION_GAINS = { mission: 40, boss: 100, event: 15, tag: 10, tagSet: 80 };
+export const TAGS_PER_DISTRICT = 10;
+
+export const RACE = {
+    checkpoints: 4,
+    radius: 7,
+    timeLimit: 85,
+    rivals: 2,
+    rivalSpeed: 12,
+    payouts: [
+        { cash: 600, score: 900, rep: 70 },
+        { cash: 300, score: 450, rep: 35 },
+        { cash: 100, score: 150, rep: 10 },
+    ],
+};
+
 export const POLICE_UNITS = {
     patrol: { turnRate: 2.35, mass: 1.1, damageFactor: 0.9, wallSpeedFactor: 0.7, hitSpeedFactor: 0.42, chaseSpeed: 11.5, chaseSpeedPerHeat: 1.4, nightBonus: 0.8, idleSpeed: 8 },
     suv: { turnRate: 1.85, mass: 1.65, damageFactor: 1.1, wallSpeedFactor: 0.78, hitSpeedFactor: 0.42, chaseSpeed: 10.8, chaseSpeedPerHeat: 1.1, nightBonus: 0, idleSpeed: 8 },
@@ -199,6 +223,14 @@ export const DISTRICTS = [
         pickupWeights: { cash: 0.34, repair: 0.11, nitro: 0.14, intel: 0.13, parts: 0.14, emp: 0.14 },
         eventWeights: { cashDrop: 0.24, partsCache: 0.08, hotVan: 0.18, roadClosure: 0.08, vipConvoy: 0.18, streetRace: 0.14, hiddenCache: 0.1 },
     },
+];
+
+// Extra contracts that unlock with a district's reputation tier 2.
+export const DISTRICT_CONTRACTS = [
+    { id: "tagsDowntown", district: "downtown", label: "Downtown-Writer", description: "Sprühe 3 Graffiti-Tags in Downtown.", metric: "tagsRun", target: 3, reward: 520 },
+    { id: "tagsIndustrial", district: "industrial", label: "Rost-Writer", description: "Sprühe 3 Graffiti-Tags im Industriebezirk.", metric: "tagsRun", target: 3, reward: 520 },
+    { id: "tagsPark", district: "park", label: "Park-Writer", description: "Sprühe 3 Graffiti-Tags im Park.", metric: "tagsRun", target: 3, reward: 520 },
+    { id: "tagsHarbor", district: "harbor", label: "Hafen-Writer", description: "Sprühe 3 Graffiti-Tags im Hafen.", metric: "tagsRun", target: 3, reward: 520 },
 ];
 
 export const WEATHER_MODES = {
@@ -400,3 +432,5 @@ export const POIS = [
     { id: "fuel", name: "Tankstelle", x: 13, z: 39, color: "#fff08a" },
     { id: "yard", name: "Baustelle", x: -13, z: 13, color: "#c9a5ff" },
 ];
+
+CONTRACTS.push(...DISTRICT_CONTRACTS);

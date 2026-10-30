@@ -14,6 +14,10 @@ export function createInitialState() {
         playerModelIndex,
         unlockedCars: [...profile.unlockedCars],
         achievements: [...profile.achievements],
+        reputation: { ...profile.reputation },
+        tags: [...profile.tags],
+        unlocks: [...profile.unlocks],
+        race: null,
         lifetime: { ...profile.lifetime },
         profile,
         player: {
@@ -88,10 +92,11 @@ export function createInitialState() {
             driftScore: 0,
         },
         contract: {
-            id: CONTRACTS[0].id,
-            progress: 0,
+            id: profile.contract?.id ?? CONTRACTS[Math.floor(Math.random() * CONTRACTS.length)].id,
+            base: 0,
+            progress: profile.contract?.progress ?? 0,
             completed: false,
-            claimed: false,
+            claimed: profile.contract?.claimed ?? false,
         },
         upgrades: { ...createDefaultProfile(CAR_MODELS, UPGRADES).upgrades, ...profile.upgrades },
         stats: {
@@ -104,6 +109,7 @@ export function createInitialState() {
             propsDestroyed: 0,
             events: 0,
             driftScore: 0,
+            tagsRun: 0,
             cashEarned: 0,
             newRecord: false,
             unlocked: [],

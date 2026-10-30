@@ -1,3 +1,5 @@
+import { reputationTier } from "./progression.js";
+import { REPUTATION_TIERS } from "./config.js";
 import { ACHIEVEMENTS, COMBO_TIERS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
 
 export function mountHud(root) {
@@ -239,6 +241,10 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     renderTacho(ui, state, selectedCar);
     ui.carName.textContent = selectedCar.name;
     ui.districtName.textContent = state.district?.name ?? "Downtown";
+    if (state.district) {
+        const tierName = REPUTATION_TIERS[reputationTier(state.reputation[state.district.id] ?? 0).index].name;
+        ui.districtName.textContent = `${state.district.name} · ${tierName}`;
+    }
     const timeLabel = state.time?.label ?? "Tag";
     ui.weatherName.textContent = `${timeLabel} | ${state.weather?.label ?? "Klar"}`;
 
@@ -636,7 +642,21 @@ function renderMinimap(ui, state, world, traffic, police, roadblocks, eventPicku
     for (const agent of police) drawMapDot(ctx, state, cx, cy, scale, width, height, agent.x, agent.z, "#ff5a4c", 3);
     for (const block of roadblocks) drawMapDot(ctx, state, cx, cy, scale, width, height, block.x, block.z, "#ff9c45", 3.5);
     for (const event of eventPickups) drawMapRing(ctx, state, cx, cy, scale, width, height, event.x, event.z, event.color);
-    for (const hazard of hazards) drawMapDot(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z, "#f7fbff", 2.5);
+    for (const hazard of hazards) {
+        if (hazard.warn > 0) drawMapWarning(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z);
+        else drawMapDot(ctx, state, cx, cy, scale, width, height, hazard.x, hazard.z, "#f7fbff", 2.5);
+    }
+    // Graffiti tags only show up when you are close.
+    for (const tag of world.tags ?? []) {
+        if (tag.collected) continue;
+        if ((tag.x - state.player.x) ** 2 + (tag.z - state.player.z) ** 2 > 34 * 34) continue;
+        drawMapDiamond(ctx, state, cx, cy, scale, width, height, tag.x, tag.z, "#ff7ad9");
+    }
+    if (state.race?.active) {
+        const nextCheckpoint = state.race.checkpoints[state.race.player.index];
+        if (nextCheckpoint) drawMapRing(ctx, state, cx, cy, scale, width, height, nextCheckpoint.x, nextCheckpoint.z, "#79ffb3");
+        for (const racer of state.race.racers) drawMapDiamond(ctx, state, cx, cy, scale, width, height, racer.x, racer.z, "#79ffb3");
+    }
     if (helicopter?.visible) drawMapRing(ctx, state, cx, cy, scale, width, height, state.helicopter.x, state.helicopter.z, "#f7fbff");
 
     const target = currentMissionTarget(state);
@@ -662,6 +682,35 @@ function drawMapDot(ctx, state, cx, cy, scale, width, height, x, z, color, radiu
     ctx.fillStyle = color;
     ctx.beginPath();
     ctx.arc(mx, my, radius, 0, Math.PI * 2);
+    ctx.fill();
+}
+
+// Shapes differ (triangle = warning, diamond = collectible/rival) so the map does not rely on colour alone.
+function drawMapWarning(ctx, state, cx, cy, scale, width, height, x, z) {
+    const mx = cx + (x - state.player.x) * scale;
+    const my = cy + (z - state.player.z) * scale;
+    if (mx < -12 || mx > width + 12 || my < -12 || my > height + 12) return;
+    const blink = Math.floor(performance.now() / 220) % 2 === 0;
+    ctx.fillStyle = blink ? "#ff3b3b" : "#ffd24d";
+    ctx.beginPath();
+    ctx.moveTo(mx, my - 7);
+    ctx.lineTo(mx + 6, my + 5);
+    ctx.lineTo(mx - 6, my + 5);
+    ctx.closePath();
+    ctx.fill();
+}
+
+function drawMapDiamond(ctx, state, cx, cy, scale, width, height, x, z, color) {
+    const mx = cx + (x - state.player.x) * scale;
+    const my = cy + (z - state.player.z) * scale;
+    if (mx < -10 || mx > width + 10 || my < -10 || my > height + 10) return;
+    ctx.fillStyle = color;
+    ctx.beginPath();
+    ctx.moveTo(mx, my - 4.5);
+    ctx.lineTo(mx + 4.5, my);
+    ctx.lineTo(mx, my + 4.5);
+    ctx.lineTo(mx - 4.5, my);
+    ctx.closePath();
     ctx.fill();
 }
 

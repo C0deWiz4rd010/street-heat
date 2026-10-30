@@ -171,6 +171,39 @@ assert.equal(BOSS_MISSIONS.length, 3);
 assert.ok(BOSS_MISSIONS.every((boss) => boss.isBoss && boss.bossType && boss.districtId));
 assert.ok(MISSION_MODIFIERS.every((modifier) => modifier.reward > 1), "modifiers must pay a bonus");
 
+// --- Progression: reputation tiers, graffiti tags, persistence ------------------------------
+const { generateTags, reputationTier } = await import("../src/progression.js");
+const { REPUTATION_TIERS, RACE, TAGS_PER_DISTRICT } = await import("../src/config.js");
+assert.equal(reputationTier(0).index, 0);
+assert.equal(reputationTier(REPUTATION_TIERS[2].at).index, 2);
+assert.equal(reputationTier(99999).next, null, "top tier has no next tier");
+assert.ok(REPUTATION_TIERS.every((tier, i) => i === 0 || tier.at > REPUTATION_TIERS[i - 1].at), "tiers must ascend");
+assert.equal(RACE.payouts.length, RACE.rivals + 1, "one payout per finishing place");
+
+const fakeBuildings = [];
+for (const bx of [-39, -13, 13, 39]) for (const bz of [-39, -13, 13, 39]) {
+    fakeBuildings.push({ x: bx - 4, z: bz - 4, hw: 4, hd: 4, h: 8 + ((bx + bz) % 9 + 9) % 9 });
+    fakeBuildings.push({ x: bx + 4, z: bz + 4, hw: 4, hd: 4, h: 20 });
+}
+const districtOfPoint = (x, z) => DISTRICTS.find((d) => d.x === (x < 0 ? -1 : 1) && d.z === (z < 0 ? -1 : 1)).id;
+const tagList = generateTags({ buildings: fakeBuildings, districtIds: DISTRICTS.map((d) => d.id), districtIdOf: districtOfPoint });
+assert.equal(tagList.length, DISTRICTS.length * TAGS_PER_DISTRICT, "ten tags per district");
+assert.equal(new Set(tagList.map((t) => t.id)).size, tagList.length, "tag ids are unique");
+assert.ok(tagList.every((t) => districtOfPoint(t.x, t.z) === t.districtId), "tags lie in their own district");
+assert.deepEqual(tagList, generateTags({ buildings: fakeBuildings, districtIds: DISTRICTS.map((d) => d.id), districtIdOf: districtOfPoint }), "tags are deterministic");
+
+const progress = createDefaultProfile(CAR_MODELS, UPGRADES);
+progress.reputation.park = 250;
+progress.tags = ["park-1", "park-2"];
+progress.unlocks = ["Lackfarbe Neon-Pink"];
+progress.contract = { id: "chaosDriver", progress: 5, claimed: false };
+saveProfile(progress);
+const reloaded = loadProfile(CAR_MODELS, UPGRADES);
+assert.equal(reloaded.reputation.park, 250);
+assert.deepEqual(reloaded.tags, ["park-1", "park-2"]);
+assert.deepEqual(reloaded.contract, { id: "chaosDriver", progress: 5, claimed: false }, "contract progress survives a reload");
+assert.equal(createInitialState(CAR_MODELS, UPGRADES, reloaded).contract.progress, 5);
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 
