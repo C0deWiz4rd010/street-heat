@@ -45,7 +45,7 @@ npm run build    # Produktionsbuild nach dist/
 npm run preview  # Build lokal ansehen
 ```
 
-Im Dev-Modus gibt es `window.__street` mit `state`, `post`, `runtime`, `renderer`, `ui` und `audio` für Prüfungen in der Konsole (`runtime.debug` enthält `startRace` und `tags`). F3 zeigt FPS, Draw Calls, Dreiecke, Geometrie- und Texturzähler.
+Mit `?gallery` an der Dev-URL zeigt eine Galerie alle Fahrzeugmodelle (Tag/Nacht, Draufsicht) zum Durchschauen. Im Dev-Modus gibt es `window.__street` mit `state`, `post`, `runtime`, `renderer`, `ui` und `audio` für Prüfungen in der Konsole (`runtime.debug` enthält `startRace` und `tags`). F3 zeigt FPS, Draw Calls, Dreiecke, Geometrie- und Texturzähler.
 
 ### Aufbau
 

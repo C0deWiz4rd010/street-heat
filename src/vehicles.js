@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { archetypeFor, archetypeId, sideContour, wheelLayout } from "./data/vehicles.js";
+import { LIGHT_STYLES, PARTS, RIM_STYLES, TIRE_STYLES, box, partContext } from "./vehicleParts.js";
 
 export function createMaterial(color, options = {}) {
     return new THREE.MeshStandardMaterial({
@@ -120,11 +121,6 @@ function cabinGeometry(model, archetype) {
     });
 }
 
-/** A box as non-indexed geometry (so it can be merged with extrusions), already moved into place. */
-function box(size, position) {
-    return new THREE.BoxGeometry(size.x, size.y, size.z).toNonIndexed().translate(position.x, position.y, position.z);
-}
-
 function mergeAll(list) {
     if (!list.length) return null;
     const merged = list.length === 1 ? list[0] : mergeGeometries(list, false);
@@ -138,36 +134,28 @@ function mergeAll(list) {
  */
 const staticCache = new Map();
 function staticGeometry(model, archetype) {
-    const key = `${archetype.id}:${model.length}:${model.width}:${model.height}`;
+    const features = [...archetype.features, ...(model.features ?? [])];
+    const lightStyle = model.lights ?? archetype.lights ?? "default";
+    const key = `${archetype.id}:${model.length}:${model.width}:${model.height}:${features.join("+")}:${lightStyle}`;
     let entry = staticCache.get(key);
     if (entry) return entry;
-    const L = model.length;
-    const W = model.width;
-    const H = model.height;
-    const cabin = archetype.cabin;
-    const roofLength = (cabin.to - cabin.from) * L - cabin.rake * L * 1.9;
+    const ctx = partContext(model, archetype);
+    const { L, W, H, cabin } = ctx;
     const groups = { paint: [bodyGeometry(model, archetype)], trim: [], dark: [], accent: [], head: [], tail: [] };
 
-    groups.trim.push(
-        box(
-            { x: W * 0.84, y: 0.07, z: Math.max(0.4, roofLength) },
-            { x: 0, y: H / 2 + cabin.height + 0.02, z: ((cabin.from + cabin.to) / 2) * L - cabin.rake * L * 0.1 }
-        )
-    );
+    groups.trim.push(box({ x: W * 0.84, y: 0.07, z: ctx.roofLength }, { x: 0, y: ctx.roofY, z: ctx.roofZ }));
     groups.dark.push(box({ x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: L / 2 }));
     groups.dark.push(box({ x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: -L / 2 }));
     for (const side of [-1, 1]) {
         groups.paint.push(box({ x: 0.14, y: 0.1, z: 0.18 }, { x: side * (W * 0.5 + 0.08), y: H / 2 + 0.14, z: cabin.to * L - 0.1 }));
-        groups.head.push(box({ x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.02, z: L / 2 + 0.06 }));
-        groups.tail.push(box({ x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.06, z: -L / 2 - 0.05 }));
     }
 
-    if (archetype.features.includes("spoiler")) {
-        groups.trim.push(box({ x: W * 0.94, y: 0.06, z: 0.38 }, { x: 0, y: H / 2 + 0.32, z: -L * 0.46 }));
-        for (const side of [-1, 1]) groups.trim.push(box({ x: 0.06, y: 0.28, z: 0.3 }, { x: side * W * 0.38, y: H / 2 + 0.16, z: -L * 0.46 }));
-    }
-    if (archetype.features.includes("hoodStripe")) {
-        groups.accent.push(box({ x: W * 0.36, y: 0.1, z: L * 0.22 }, { x: 0, y: H / 2 + 0.05, z: L * 0.2 }));
+    const lights = (LIGHT_STYLES[lightStyle] ?? LIGHT_STYLES.default)(ctx);
+    for (const [group, list] of Object.entries(lights)) groups[group].push(...list);
+    for (const name of features) {
+        const built = PARTS[name]?.(ctx);
+        if (!built) continue;
+        for (const [group, list] of Object.entries(built)) groups[group].push(...list);
     }
 
     entry = { glass: cabinGeometry(model, archetype) };
@@ -189,15 +177,18 @@ function sharedPart(key, build) {
 
 let rimMaterial = null;
 
-function wheelParts() {
+function wheelParts(rimStyle = "disc", tireStyle = "standard") {
     if (!rimMaterial) {
         rimMaterial = createMaterial("#c9d2dc", { roughness: 0.22, metalness: 0.85 });
         rimMaterial.userData.shared = true;
     }
+    const tireSpec = TIRE_STYLES[tireStyle] ?? TIRE_STYLES.standard;
+    const rimBuilder = RIM_STYLES[rimStyle] ?? RIM_STYLES.disc;
     return {
-        tire: cached("wheel:tire", () => new THREE.CylinderGeometry(0.42, 0.42, 0.34, 14).rotateZ(Math.PI / 2)),
-        rim: cached("wheel:rim", () => new THREE.CylinderGeometry(0.27, 0.27, 0.36, 8).rotateZ(Math.PI / 2)),
-        rimMat: rimMaterial,
+        tire: cached(`wheel:tire:${tireStyle}`, () => new THREE.CylinderGeometry(tireSpec.radius, tireSpec.radius, tireSpec.width, 14).rotateZ(Math.PI / 2)),
+        rim: cached(`wheel:rim:${rimStyle}`, () => rimBuilder()),
+        rimMat: rimStyle === "neonRing" ? sharedPart("rim:neon", () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 2.2, 2.6) })) : rimMaterial,
+        radius: tireSpec.radius,
     };
 }
 
@@ -238,7 +229,7 @@ export function createCar(model, sharedMaterials, options = {}) {
     addMerged(fixed.tail, tailMat, false, false);
 
     // Wheels: pivot (steering) > spin (rolling) > tire + rim
-    const { tire, rim, rimMat } = wheelParts();
+    const { tire, rim, rimMat, radius: tireRadius } = wheelParts(options.wheelStyle ?? model.wheelStyle ?? archetype.wheelStyle, model.tireStyle ?? archetype.tireStyle);
     const wheels = [];
     for (const spot of wheelLayout(archetype, W, L)) {
         const pivot = new THREE.Group();
@@ -253,7 +244,7 @@ export function createCar(model, sharedMaterials, options = {}) {
         wheels.push({ pivot, spin, front: spot.front });
     }
 
-    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: 0.42, tune: null, tuneKey: null, siren: null, spot: null };
+    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius, tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
         const barY = H / 2 + cabin.height + 0.12;

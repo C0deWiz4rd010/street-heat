@@ -71,3 +71,11 @@ export function wheelLayout(archetype, width, length) {
         [1, -1, false],
     ].map(([sx, sz, front]) => ({ sx, front, radius, x: sx * width * track, y, z: sz * length * base }));
 }
+
+// Dev gallery: existing bodies dressed with the new parts, to review shapes, lights and wheels side by side.
+export const SHOWCASE_OVERRIDES = [
+    { base: 0, model: { name: "Coupe Rallye", color: "#2f6fd6", features: ["roofRack", "lightBar", "bullBar"], wheelStyle: "fiveSpoke", lights: "slit" } },
+    { base: 1, model: { name: "Muscle Flossen", color: "#c8362c", features: ["fins", "exhaustStacks"], wheelStyle: "turbine", lights: "quad", tireStyle: "fat" } },
+    { base: 2, model: { name: "Sport GT", color: "#ff3fa4", features: ["spoilerGT", "hoodScoop"], wheelStyle: "neonRing", lights: "ledBar" } },
+    { base: 3, model: { name: "Van Expedition", color: "#8a6a44", features: ["snorkel", "sideSteps", "roofRack"], wheelStyle: "disc", tireStyle: "fat", lights: "quad" } },
+];

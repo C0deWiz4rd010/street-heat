@@ -459,6 +459,46 @@ for (const model of CAR_MODELS) {
     assert.ok(police.userData.parts.siren, `${model.id}: police cars get a light bar`);
 }
 
+// --- Parts library: every part, light style, rim style and showcase model builds ------------
+const parts = await import("../src/vehicleParts.js");
+const { SHOWCASE_OVERRIDES } = await import("../src/data/vehicles.js");
+const sampleModel = CAR_MODELS[0];
+const sampleContext = parts.partContext(sampleModel, archetypeFor(sampleModel));
+const KNOWN_GROUPS = new Set(["paint", "trim", "dark", "accent", "head", "tail"]);
+for (const name of parts.PART_NAMES) {
+    const built = parts.PARTS[name](sampleContext);
+    const groups = Object.keys(built);
+    assert.ok(groups.length > 0 && groups.every((group) => KNOWN_GROUPS.has(group)), `part ${name}: uses known material groups`);
+    for (const list of Object.values(built)) {
+        assert.ok(list.length > 0 && list.every((g) => g.attributes.position.count > 0 && !g.index), `part ${name}: non-empty, non-indexed geometry (mergeable)`);
+    }
+}
+for (const name of parts.LIGHT_STYLE_NAMES) {
+    const lights = parts.LIGHT_STYLES[name](sampleContext);
+    assert.ok(lights.head.length > 0 && lights.tail.length > 0, `light style ${name}: has head and tail lights`);
+    assert.ok([...lights.head, ...lights.tail].every((g) => !g.index), `light style ${name}: mergeable geometry`);
+}
+for (const name of parts.RIM_STYLE_NAMES) {
+    const rim = parts.RIM_STYLES[name]();
+    assert.ok(rim.attributes.position.count > 0, `rim style ${name}: builds`);
+}
+assert.ok(parts.TIRE_STYLES.fat.width > parts.TIRE_STYLES.standard.width, "fat tyres are wider");
+
+const showcaseSeen = new Set();
+for (const override of SHOWCASE_OVERRIDES) {
+    const model = { ...CAR_MODELS[override.base], ...override.model };
+    for (const feature of model.features ?? []) assert.ok(parts.PART_NAMES.includes(feature), `showcase ${model.name}: unknown feature ${feature}`);
+    if (model.wheelStyle) assert.ok(parts.RIM_STYLE_NAMES.includes(model.wheelStyle), `showcase ${model.name}: unknown wheel style`);
+    if (model.lights) assert.ok(parts.LIGHT_STYLE_NAMES.includes(model.lights), `showcase ${model.name}: unknown light style`);
+    const car = createCar(model, builderMaterials);
+    let meshCount = 0;
+    car.traverse((node) => { if (node.isMesh) meshCount += 1; });
+    assert.ok(meshCount <= 18, `showcase ${model.name}: still merged (${meshCount} meshes)`);
+    assert.ok(car.userData.parts.wheelRadius >= 0.42, `showcase ${model.name}: wheel radius follows the tyre style`);
+    showcaseSeen.add(model.name);
+}
+assert.equal(showcaseSeen.size, SHOWCASE_OVERRIDES.length, "showcase models have unique names");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

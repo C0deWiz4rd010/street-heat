@@ -289,9 +289,22 @@ runtime.reset({ showMenu: true });
 
 const clock = new THREE.Clock();
 
+// Dev-only vehicle gallery: open the game with ?gallery.
+let gallery = null;
+if (import.meta.env.DEV && new URLSearchParams(location.search).has("gallery")) {
+    import("./gallery.js").then(({ createGallery }) => {
+        gallery = createGallery({ renderer, sharedMaterials });
+        document.getElementById("app").style.display = "none";
+    });
+}
+
 function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
+    if (gallery) {
+        gallery.render(dt);
+        return;
+    }
     input.update(dt);
     state.tip = onboarding.update(state, dt);
     runtime.update(dt, input);

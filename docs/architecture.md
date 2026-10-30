@@ -17,6 +17,7 @@ main.js            verdrahtet Renderer, Welt, Runtime, Input, Settings, Audio un
  │   ├─ systems/weather.js  Tag/Nacht, Wetterfarben und -licht, Blitze, Dampf
  │   ├─ systems/tags.js     Graffiti-Tags
  │   └─ systems/race.js     illegales Straßenrennen
+ ├─ vehicles.js    Fahrzeug-Builder: baut aus Archetyp und Modell wenige gemergte Meshes plus Räder (gallery.js: Dev-Galerie mit ?gallery)
  ├─ ui.js          HUD, Menüs, Modals, Minimap (rein lesend auf dem State)
  ├─ input.js       Tastatur, Touch-Stick, Gamepad -> logische Tasten und analoge Achsen
  ├─ audio.js       Web-Audio-Mix, Motor, Effekte, Musik-Sequencer
@@ -41,6 +42,7 @@ Diese Module kennen weder DOM noch Three.js und laufen in `npm test` headless:
 | `bindings.js`, `gamepad.js` | Tasten-Mapping, Gamepad-Lesen, Rumble-Stärke |
 | `music.js`, `siren.js` | Notendaten, Ebenen je Heat, Sirenen-Muster (Synthese in `audio.js`/`siren.js`) |
 | `onboarding.js`, `settings.js` | Tutorial-Schritte, Einstellungen mit Validierung |
+| `data/vehicles.js`, `vehicleParts.js` | Karosserie-Archetypen (Kontur, Kabine, Radlayout), Teile-Bibliothek (Spoiler, Racks, Lichtbalken, Rammschutz ...), Lichtstile, Felgenstile |
 | `util/math.js` | `clamp`, `wrapAngle`, `turnToward`, Achsen-Helfer |
 
 ## Muster für ausgelagerte Systeme
