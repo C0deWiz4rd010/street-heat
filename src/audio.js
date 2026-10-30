@@ -1,3 +1,4 @@
+import { engineToneFor } from "./engineTones.js";
 import { CAR_MODELS } from "./config.js";
 import { createSiren, sirenLevelFor, sirenModeFor } from "./siren.js";
 import { BASS_STEPS, CHORD_TONES, HAT_STEPS, KICK_STEPS, LEAD_ARP, SNARE_STEPS, STEPS_PER_BAR, chordRoot, layerGains, musicModeFor, semitoneHz, stepSeconds } from "./music.js";
@@ -148,7 +149,7 @@ export function createAudioDirector() {
         o3.connect(g3).connect(shaper);
         shaper.connect(filter).connect(out).connect(sfxBus);
         for (const osc of [o1, o2, o3]) osc.start();
-        engine = { o1, o2, o3, filter, out };
+        engine = { o1, o2, o3, g1, g2, g3, filter, out };
 
         // Nitro growl: low sine layer.
         const subOsc = context.createOscillator();
@@ -290,6 +291,22 @@ export function createAudioDirector() {
         source.stop(t + decay + 0.05);
     }
 
+    let appliedTone = null;
+    let toneRatios = engineToneFor(null).ratios;
+
+    function applyEngineTone(model) {
+        appliedTone = model.engineTone;
+        const tone = engineToneFor(model);
+        toneRatios = tone.ratios;
+        [engine.o1, engine.o2, engine.o3].forEach((osc, index) => {
+            osc.type = tone.types[index];
+        });
+        engine.g1.gain.value = tone.gains[0];
+        engine.g2.gain.value = tone.gains[1];
+        engine.g3.gain.value = tone.gains[2];
+        engine.filter.Q.value = tone.q;
+    }
+
     // ------------------------------------------------------------------ per-frame update
     function update(state, dt) {
         if (!unlocked || !context) return;
@@ -301,6 +318,7 @@ export function createAudioDirector() {
 
         const model = CAR_MODELS[state.playerModelIndex] ?? CAR_MODELS[0];
         const pitchBase = model.enginePitchBase ?? 58;
+        if (model.engineTone !== appliedTone) applyEngineTone(model);
         const speedMag = player.speedMag ?? Math.abs(player.speed);
         const active = state.running && !state.paused && state.screen === "playing";
 
@@ -314,8 +332,8 @@ export function createAudioDirector() {
         const throttle = player.throttle ?? (speedMag > 1 ? 0.5 : 0);
         const freq = pitchBase * (0.9 + rpm * 1.9 + gear * 0.12) * (1 - gearDip * 0.24) + player.drift * 22;
         engine.o1.frequency.setTargetAtTime(freq, now, 0.04);
-        engine.o2.frequency.setTargetAtTime(freq * 2, now, 0.04);
-        engine.o3.frequency.setTargetAtTime(freq * 0.5, now, 0.04);
+        engine.o2.frequency.setTargetAtTime(freq * toneRatios[1], now, 0.04);
+        engine.o3.frequency.setTargetAtTime(freq * toneRatios[2], now, 0.04);
         engine.filter.frequency.setTargetAtTime(450 + throttle * 1700 + rpm * 700 + (player.nitroActive ? 700 : 0), now, 0.06);
         engine.out.gain.setTargetAtTime(active ? 0.05 + rpm * 0.05 + throttle * 0.07 : 0, now, 0.08);
 

@@ -346,6 +346,7 @@ export const CAR_MODELS = [
         weightTransfer: 1.0,
         driftSlip: 1.0,
         enginePitchBase: 60,
+        engineTone: "turbo",
     },
     {
         id: "bulldog",
@@ -369,6 +370,7 @@ export const CAR_MODELS = [
         weightTransfer: 0.6,
         driftSlip: 1.15,
         enginePitchBase: 48,
+        engineTone: "v8",
     },
     {
         id: "needle",
@@ -392,6 +394,7 @@ export const CAR_MODELS = [
         weightTransfer: 1.35,
         driftSlip: 0.8,
         enginePitchBase: 78,
+        engineTone: "electric",
     },
     {
         id: "mule",
@@ -415,6 +418,7 @@ export const CAR_MODELS = [
         weightTransfer: 0.4,
         driftSlip: 1.3,
         enginePitchBase: 42,
+        engineTone: "diesel",
     },
     {
         id: "hornet",
@@ -441,6 +445,7 @@ export const CAR_MODELS = [
         weightTransfer: 1.25,
         driftSlip: 0.85,
         enginePitchBase: 70,
+        engineTone: "twoStroke",
     },
     {
         id: "scarab",
@@ -468,6 +473,8 @@ export const CAR_MODELS = [
         weightTransfer: 0.8,
         driftSlip: 1.05,
         enginePitchBase: 52,
+        engineTone: "turbo",
+        perks: { offroad: 0.7 },
     },
     {
         id: "barge",
@@ -495,6 +502,7 @@ export const CAR_MODELS = [
         weightTransfer: 0.45,
         driftSlip: 1.25,
         enginePitchBase: 44,
+        engineTone: "v8",
     },
     {
         id: "forge",
@@ -522,6 +530,8 @@ export const CAR_MODELS = [
         weightTransfer: 0.7,
         driftSlip: 1.1,
         enginePitchBase: 46,
+        engineTone: "v8",
+        perks: { nitroTime: 1.35 },
     },
     {
         id: "tide",
@@ -550,6 +560,7 @@ export const CAR_MODELS = [
         weightTransfer: 1.5,
         driftSlip: 0.9,
         enginePitchBase: 82,
+        engineTone: "twoStroke",
     },
     {
         id: "wraith",
@@ -577,6 +588,8 @@ export const CAR_MODELS = [
         weightTransfer: 1.3,
         driftSlip: 0.85,
         enginePitchBase: 74,
+        engineTone: "electric",
+        perks: { policeSight: 0.85 },
     },
 ];
 

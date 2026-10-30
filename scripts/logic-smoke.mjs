@@ -260,6 +260,21 @@ const crash = { vx: 12, vz: 0 };
 headOnDamp(crash, 1.9);
 assert.ok(crash.vx < 6.5, "head-on hits shed most of the speed");
 
+const { ENGINE_TONES, engineToneFor } = await import("../src/engineTones.js");
+const { CAR_MODELS: tonedCars } = await import("../src/config.js");
+const { applyOffroadPerk, damageLevel } = await import("../src/physics/vehicle.js");
+assert.ok(tonedCars.every((car) => ENGINE_TONES[car.engineTone]), "every player car has a known engine tone");
+assert.ok(new Set(tonedCars.map((car) => car.engineTone)).size >= 4, "the garage offers distinct engine voices");
+assert.ok(Object.values(ENGINE_TONES).every((tone) => tone.types.length === 3 && tone.ratios.length === 3 && tone.gains.length === 3), "tones define three oscillators");
+assert.equal(engineToneFor({ engineTone: "nope" }), ENGINE_TONES.v8, "unknown tones fall back to v8");
+const grass = SURFACES.grass;
+assert.equal(applyOffroadPerk(grass, tonedCars[0]), grass, "no perk, no change");
+const scarabGrass = applyOffroadPerk(grass, tonedCars.find((car) => car.id === "scarab"));
+assert.ok(scarabGrass.grip > grass.grip && scarabGrass.grip < SURFACES.road.grip && scarabGrass.rolling < grass.rolling && scarabGrass.speed > grass.speed, "the Scarab loses less on soft ground but is not a road car");
+assert.equal(scarabGrass.id, "grass");
+assert.ok(tonedCars.find((car) => car.id === "wraith").perks.policeSight < 1 && tonedCars.find((car) => car.id === "forge").perks.nitroTime > 1, "perks exist");
+assert.deepEqual([damageLevel(100, 100), damageLevel(49, 100), damageLevel(24, 100), damageLevel(5, 0)], [0, 1, 2, 0], "damage levels");
+
 assert.equal(PAINT_JOBS[0].id, "default");
 for (const group of LOOK_GROUPS) {
     assert.equal(new Set(group.options.map((option) => option.id)).size, group.options.length, `${group.key} ids are unique`);

@@ -167,6 +167,25 @@ export function cancelNormalVelocity(p, nx, nz) {
     }
 }
 
+/**
+ * Pulls a soft surface toward asphalt by the car's `perks.offroad` share (0 = no help, 1 = grass drives like road).
+ * Returns the surface unchanged for cars without the perk.
+ */
+export function applyOffroadPerk(surface, model) {
+    const share = model?.perks?.offroad ?? 0;
+    if (!share) return surface;
+    const road = SURFACES.road;
+    const mix = (key) => surface[key] + (road[key] - surface[key]) * share;
+    return { ...surface, grip: mix("grip"), rolling: mix("rolling"), speed: mix("speed") };
+}
+
+/** 0 = fine, 1 = smoking (below half health), 2 = sparking (below a quarter). */
+export function damageLevel(health, maxHealth) {
+    const ratio = maxHealth > 0 ? health / maxHealth : 1;
+    if (ratio < 0.25) return 2;
+    return ratio < 0.5 ? 1 : 0;
+}
+
 /** Surface under a point: streets and plazas grip, soft ground drags. */
 export function surfaceAt(x, z, districtId, inShortcut) {
     const half = CONFIG.map.streetWidth / 2 + 0.8;

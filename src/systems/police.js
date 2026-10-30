@@ -502,7 +502,7 @@ export function createPoliceSystem({
         if (isInEscapeCover(state.player.x, state.player.z)) factor -= 0.16;
         if (isScannerActive()) factor += 0.12;
         if (state.helicopter.active && distanceSq(state.player.x, state.player.z, state.helicopter.x, state.helicopter.z) < 15 * 15) factor += 0.22;
-        return clamp(factor, 0.55, 1.45);
+        return clamp(factor, 0.55, 1.45) * (CAR_MODELS[state.playerModelIndex]?.perks?.policeSight ?? 1);
     }
 
     function scramble(x, z, radius = 24) {

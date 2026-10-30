@@ -1,5 +1,5 @@
 import { CAR_MODELS, CONFIG, DISTRICTS, VEHICLE_PHYSICS, WEATHER_MODES } from "../config.js";
-import { applyEngine, applyGrip, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, playerRadius, surfaceAt, updateDrift } from "../physics/vehicle.js";
+import { applyEngine, applyGrip, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, applyOffroadPerk, damageLevel, playerRadius, surfaceAt, updateDrift } from "../physics/vehicle.js";
 import { resolveLook } from "../data/looks.js";
 import { clamp } from "../util/math.js";
 import { obstacleAt, pushOutBuildings } from "../world.js";
@@ -37,7 +37,7 @@ export function createPlayerSystem({
         player.radius = radius;
         const district = state.district ?? DISTRICTS[0];
         const inShortcut = district.id === "park" && isInsideShortcutZone(player.x, player.z);
-        const surface = surfaceAt(player.x, player.z, district.id, inShortcut);
+        const surface = applyOffroadPerk(surfaceAt(player.x, player.z, district.id, inShortcut), model);
         const gripLevel = state.upgrades.grip;
         const nitroLevel = state.upgrades.nitro;
         const armorLevel = state.upgrades.armor;
@@ -89,7 +89,7 @@ export function createPlayerSystem({
         const boostedMax = maxSpeed + nitroBonusSpeed;
 
         if (nitro) {
-            player.nitro = Math.max(0, player.nitro - dt * CONFIG.player.nitroBurn);
+            player.nitro = Math.max(0, player.nitro - (dt * CONFIG.player.nitroBurn) / (model.perks?.nitroTime ?? 1));
             spawnParticle(player.x - fwdX * 2, player.z - fwdZ * 2, resolveLook(state.look, state.unlocks).flame.color, 2);
         } else {
             const districtNitro = district.nitroRegenBonus ?? 0;
@@ -256,7 +256,29 @@ export function createPlayerSystem({
         if (player.drift > 0.2) addSkidMark();
     }
 
+    /** Damaged cars show it: dark smoke from the hood below half health, sparks from the undercarriage below a quarter. */
+    function damageEffects(dt) {
+        const player = state.player;
+        const level = damageLevel(player.health, getMaxHealth());
+        if (!level || !state.running || state.screen !== "playing") return;
+        player.damageTimer = (player.damageTimer ?? 0) - dt;
+        if (player.damageTimer > 0) return;
+        const model = CAR_MODELS[state.playerModelIndex];
+        const nose = model.length * 0.3;
+        const x = player.x + Math.sin(player.rotation) * nose;
+        const z = player.z + Math.cos(player.rotation) * nose;
+        if (level === 2) {
+            player.damageTimer = 0.16;
+            effects.spawnSparks(x, z, 2, 0.4);
+            effects.spawnSmoke(x, z, { color: "#15171c", y: 1.1, alpha: 0.55, size: 1.7, life: 0.9 });
+        } else {
+            player.damageTimer = 0.22;
+            effects.spawnSmoke(x, z, { color: "#4a4e57", y: 1.0, alpha: 0.38, size: 1.4, life: 0.8 });
+        }
+    }
+
     function passiveRegen(dt) {
+        damageEffects(dt);
         const player = state.player;
         player.regenCooldown = Math.max(0, (player.regenCooldown ?? 0) - dt);
         if (player.regenCooldown > 0) return;
