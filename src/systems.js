@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, POLICE_UNITS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } from "./data/missions.js";
 import { buildRoadGraph, hasLineOfSight, nextWaypoint, nearestNode } from "./ai/police.js";
 import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
@@ -299,8 +300,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         setStatus(`Fahrzeug gewechselt: ${CAR_MODELS[index].name}.`, 1.8);
     }
 
-    function setMission(stage) {
+    function setMission(stage, options = {}) {
         clearMissionBoss();
+        state.mission.failed = false;
         const chainStage = (stage - 1) % 3;
         const bossMission = shouldSpawnBossMission(stage);
         const baseDistrictId = MISSION_DISTRICT_ORDER[Math.floor((stage - 1) / 3) % MISSION_DISTRICT_ORDER.length];
@@ -309,6 +311,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             : buildMissionConfig(stage, baseDistrictId, chainStage);
         const missionDistrict = DISTRICTS.find((district) => district.id === (missionConfig.districtId ?? baseDistrictId)) ?? DISTRICTS[0];
         state.mission.stage = stage;
+        applyMissionModifier(missionConfig, stage, bossMission, options.keepModifier);
         state.mission.progress = 0;
         state.mission.cargo = false;
         state.mission.route = [];
@@ -323,7 +326,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.mission.routeIndex = 0;
         state.mission.districtId = missionDistrict.id;
         state.mission.districtName = missionDistrict.name;
-        state.mission.chainName = missionConfig.title;
+        state.mission.chainName = state.modifiers.label ? `${missionConfig.title} [${state.modifiers.label}]` : missionConfig.title;
         state.mission.chainStep = chainStage + 1;
         state.mission.chainLength = 3;
         state.mission.description = missionConfig.description;
@@ -584,14 +587,43 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (player.drift > 0.2) addSkidMark();
     }
 
+    function failMission() {
+        const mission = state.mission;
+        mission.failed = true;
+        mission.failTimer = 8;
+        mission.failCost = Math.round(60 + mission.stage * 12);
+        clearMissionBoss();
+        audio?.denied?.();
+        spawnPopup("MISSION GESCHEITERT", "bounty");
+        setStatus(`Zeit abgelaufen. [X] Erneut für $${mission.failCost}, sonst geht es in ${mission.failTimer}s weiter.`, 8);
+    }
+
+    function retryMission() {
+        const mission = state.mission;
+        if (!spendCash(mission.failCost)) {
+            setStatus(`Zu wenig Cash für einen neuen Versuch ($${mission.failCost}).`, 1.8);
+            audio?.denied?.();
+            return;
+        }
+        setMission(mission.stage, { keepModifier: state.modifiers.id ?? null });
+        setStatus("Neuer Versuch. Gleiche Mission, gleiche Regeln.", 2);
+    }
+
     function updateMission(dt) {
+        if (state.mission.failed) {
+            state.mission.failTimer -= dt;
+            if (state.mission.failTimer <= 0 && state.running) {
+                setStatus("Mission übersprungen. Nächster Auftrag.", 2);
+                setMission(state.mission.stage + 1);
+            }
+            return;
+        }
         state.mission.timer -= dt;
         updateMissionBonusProgress();
         updateMissionBoss(dt);
+        if (state.modifiers.forcedPursuit && state.wanted.level < 2) updateWanted(2);
         if (state.mission.timer <= 0) {
-            damagePlayer(8);
-            setStatus("Mission verpasst. Neue Chance — halte dich zusammen.", 2.6);
-            if (state.running) setMission(state.mission.stage);
+            failMission();
             return;
         }
 
@@ -637,12 +669,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function completeMission() {
+        if (state.mission.failed) return;
         updateMissionBonusProgress();
         const bonus = state.mission.bonus;
         const bonusAchieved = Boolean(bonus?.completed);
         const baseReward = 850 + state.mission.stage * 230 + (state.mission.type === "heist" ? 600 : 0) + (state.mission.isBoss ? 520 : 0);
         const hotMultiplier = state.mission.cashoutMultiplier ?? 1;
-        const reward = Math.round(baseReward * hotMultiplier);
+        const reward = Math.round(baseReward * hotMultiplier * (state.modifiers.reward ?? 1));
         addScore(reward, true);
         const cashGain = addCash(Math.floor(reward * 0.34));
         let bonusCash = 0;
@@ -667,6 +700,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const missionName = state.mission.chainName;
         const statusParts = [`${missionName} abgeschlossen.`, `Bank +$${cashGain}`];
         if (hotMultiplier > 1) statusParts.push(`Hot Drop x${hotMultiplier.toFixed(2)}`);
+        if ((state.modifiers.reward ?? 1) > 1) statusParts.push(`${state.modifiers.label} x${state.modifiers.reward.toFixed(2)}`);
         if (bonusCash > 0) statusParts.push(`Bonus +$${bonusCash}`);
         if (chainCash > 0) statusParts.push(`Chain +$${chainCash}`);
         setStatus(statusParts.join(" "), 3);
@@ -1508,6 +1542,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function updateMissionInteraction(input) {
+        if (state.mission.failed) {
+            if (input.consume("x")) retryMission();
+            return;
+        }
         if (!canCashOutMission()) return;
         const target = currentMissionTurnInTarget();
         if (!target) return;
@@ -1540,6 +1578,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function updateTimeOfDay(dt, passive = false) {
         if (passive) return;
+        if (state.modifiers.nightOnly) {
+            state.time.timer = Math.max(state.time.timer, 20);
+            return;
+        }
         state.time.timer -= dt;
         if (state.time.timer > 0) return;
 
@@ -2580,158 +2622,18 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         saveProfile(state.profile);
     }
 
-    function buildMissionConfig(stage, districtId, chainStage) {
-        const stageScale = Math.floor((stage - 1) / 3);
+    function missionHelpers(districtId) {
         const district = DISTRICTS.find((entry) => entry.id === districtId) ?? DISTRICTS[0];
-
-        if (districtId === "downtown") {
-            if (chainStage === 0) {
-                return {
-                    type: "delivery",
-                    title: "Downtown Warm-up",
-                    description: "Kurierfahrt durch die engen Straassenschluchten.",
-                    target: 1,
-                    timer: 50 + stageScale * 4,
-                    from: { name: "Courier Hub", x: 18, z: 40 },
-                    to: { name: "Skyline Drop", x: 47, z: 19 },
-                    maxRiskLevel: 3,
-                    bonus: { id: "quickFinish", label: "Tempo-Bonus", description: "Schliesse frueh ab.", target: 20, reward: 220 },
-                };
-            }
-            if (chainStage === 1) {
-                return {
-                    type: "checkpoint",
-                    title: "Neon Line",
-                    description: "Nimm die Boulevard-Linie durch Downtown.",
-                    target: 3 + Math.min(2, stageScale),
-                    timer: 46 + stageScale * 4,
-                    route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
-                    bonus: { id: "noCrash", label: "Saubere Linie", description: "Ohne Einschlag bleiben.", target: 1, reward: 240 },
-                };
-            }
-            return {
-                type: "pursuit",
-                title: "Blue Light Bait",
-                description: "Zieh die Verfolger durch die Hochhauskanten.",
-                target: 3 + stageScale,
-                timer: 40 + stageScale * 4,
-                minimumHeat: 2 + Math.min(2, stageScale),
-                bonus: { id: "highHeat", label: "Heisses Finale", description: "Mit Heat 3+ abschliessen.", target: 3, reward: 280 },
-            };
-        }
-
-        if (districtId === "industrial") {
-            if (chainStage === 0) {
-                return {
-                    type: "pickup",
-                    title: "Scrapyard Sweep",
-                    description: "Sichere Teile im Industriebezirk.",
-                    target: 3 + stageScale,
-                    timer: 54 + stageScale * 4,
-                    to: createDistrictAnchor(district),
-                    pickupSeed: 4,
-                    bonus: { id: "noRepair", label: "Werkstattverbot", description: "Keine Garage waehrend des Auftrags.", target: 1, reward: 210 },
-                };
-            }
-            if (chainStage === 1) {
-                return {
-                    type: "delivery",
-                    title: "Parts Run",
-                    description: "Bring den Werkstatt-Transfer aus dem Yard raus.",
-                    target: 1,
-                    timer: 52 + stageScale * 4,
-                    from: getPoi("yard"),
-                    to: getPoi("depot"),
-                    maxRiskLevel: 2,
-                    bonus: { id: "quickFinish", label: "Schichtende", description: "Unter Zeitdruck liefern.", target: 18, reward: 240 },
-                };
-            }
-            return {
-                type: "heist",
-                title: "Foundry Grab",
-                description: "Zieh heisse Ware aus dem Rostguerel und bring sie raus.",
-                target: 1,
-                timer: 48 + stageScale * 4,
-                from: { name: "Schmelzhof", x: -18, z: 22 },
-                to: getPoi("safehouse"),
-                minimumHeat: 3,
-                maxRiskLevel: 3,
-                bonus: { id: "noCrash", label: "Keine Dellen", description: "Ohne Einschlag rausfahren.", target: 1, reward: 300 },
-            };
-        }
-
-        if (districtId === "park") {
-            if (chainStage === 0) {
-                return {
-                    type: "checkpoint",
-                    title: "Green Drift",
-                    description: "Zieh die Route ueber Wege und Wiesenlinien.",
-                    target: 3 + Math.min(2, stageScale),
-                    timer: 50 + stageScale * 4,
-                    route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
-                    bonus: { id: "shortcut", label: "Shortcut-Line", description: "Nutze Parkwege mehrfach.", target: 2, reward: 230 },
-                };
-            }
-            if (chainStage === 1) {
-                return {
-                    type: "pickup",
-                    title: "Nitro Bloom",
-                    description: "Raeum mobile Caches im Parkbecken ab.",
-                    target: 3 + stageScale,
-                    timer: 48 + stageScale * 4,
-                    to: createDistrictAnchor(district),
-                    pickupSeed: 4,
-                    bonus: { id: "shortcut", label: "Pfadfinder", description: "Bleib ueber die Park-Cuts in Bewegung.", target: 2, reward: 220 },
-                };
-            }
-            return {
-                type: "escape",
-                title: "Quiet Exit",
-                description: "Bring den Run sauber zur Garage, bevor Heat zuschnappt.",
-                target: 1,
-                timer: 38 + stageScale * 4,
-                to: getPoi("garage"),
-                minimumHeat: 1 + Math.min(2, stageScale),
-                maxRiskLevel: 2,
-                bonus: { id: "noCrash", label: "Soft Touch", description: "Ohne Einschlag zur Ausfahrt.", target: 1, reward: 260 },
-            };
-        }
-
-        if (chainStage === 0) {
-            return {
-                type: "delivery",
-                title: "Dock Runner",
-                description: "Schmuggelware aus der Hafenzone herausziehen.",
-                target: 1,
-                timer: 48 + stageScale * 4,
-                from: { name: "Pier Safe", x: -44, z: -19 },
-                to: getPoi("safehouse"),
-                minimumHeat: 2,
-                maxRiskLevel: 3,
-                bonus: { id: "highHeat", label: "Heisse Route", description: "Mit Heat 3+ abgeben.", target: 3, reward: 280 },
-            };
-        }
-        if (chainStage === 1) {
-            return {
-                type: "checkpoint",
-                title: "Crane Loop",
-                description: "Spring die Dock-Linie von Rampe zu Rampe ab.",
-                target: 3 + Math.min(2, stageScale),
-                timer: 44 + stageScale * 4,
-                route: getDistrictWaypointRoute(districtId, 3 + Math.min(2, stageScale), stage),
-                bonus: { id: "quickFinish", label: "Schnelle Uebergabe", description: "Mit Zeitreserve beenden.", target: 16, reward: 250 },
-            };
-        }
         return {
-            type: "escape",
-            title: "Breakwater Exit",
-            description: "Schuettel den Druck ab und bring den Run heim.",
-            target: 1,
-            timer: 36 + stageScale * 4,
-            to: getPoi("safehouse"),
-            minimumHeat: 3,
-            bonus: { id: "highHeat", label: "Harter Cut", description: "Mit Heat 4+ rauskommen.", target: 4, reward: 320 },
+            getPoi,
+            anchor: () => createDistrictAnchor(district),
+            route: (count) => getDistrictWaypointRoute(districtId, count, state.mission.stage),
         };
+    }
+
+    function buildMissionConfig(stage, districtId, chainStage) {
+        const chain = MISSION_CHAINS[districtId] ?? MISSION_CHAINS.downtown;
+        return resolveMission(chain[chainStage] ?? chain[0], stage, missionHelpers(districtId));
     }
 
     function shouldSpawnBossMission(stage) {
@@ -2739,53 +2641,35 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function buildBossMissionConfig(stage, districtId) {
-        const bossIndex = Math.floor(stage / 6) % 3;
-        if (bossIndex === 1) {
-            return {
-                type: "bossArmored",
-                title: "Boss: Gepanzerter Transporter",
-                description: "Brich den Konvoi auf, sichere die Ladung und bring sie heim.",
-                target: 1,
-                timer: 64,
-                to: getPoi("safehouse"),
-                minimumHeat: 4,
-                isBoss: true,
-                bossType: "armoredTransporter",
-                districtId: "industrial",
-                maxRiskLevel: 3,
-                bonus: { id: "highHeat", label: "Grosswild", description: "Mit Heat 4+ abgeben.", target: 4, reward: 420 },
-            };
+        const entry = BOSS_MISSIONS[Math.floor(stage / 6) % BOSS_MISSIONS.length];
+        return resolveMission(entry, stage, missionHelpers(entry.districtId ?? districtId));
+    }
+
+    /** Every third regular mission rolls a modifier (kept on a retry) that pays a reward bonus. */
+    function applyMissionModifier(config, stage, boss, keepId) {
+        const modifiers = state.modifiers;
+        modifiers.nightOnly = false;
+        modifiers.noBrake = false;
+        modifiers.forcedPursuit = false;
+        modifiers.timeAttack = false;
+        modifiers.label = "";
+        modifiers.reward = 1;
+        if (boss) return config;
+        const rolled = keepId !== undefined ? keepId : stage % 3 === 0 ? MISSION_MODIFIERS[Math.floor(Math.random() * MISSION_MODIFIERS.length)].id : null;
+        const modifier = MISSION_MODIFIERS.find((entry) => entry.id === rolled);
+        modifiers.id = modifier?.id ?? null;
+        if (!modifier) return config;
+        modifiers[modifier.id] = true;
+        modifiers.label = modifier.label;
+        modifiers.reward = modifier.reward;
+        if (modifier.id === "timeAttack") config.timer = Math.round(config.timer * 0.7);
+        if (modifier.id === "forcedPursuit") config.minimumHeat = Math.max(config.minimumHeat ?? 0, 3);
+        if (modifier.id === "nightOnly") {
+            state.time.phase = "night";
+            state.time.label = "Nacht";
+            state.time.timer = 60;
         }
-        if (bossIndex === 2) {
-            return {
-                type: "bossHeli",
-                title: "Boss: Helikopterjagd",
-                description: "Halte die Jagd aus, dann tauch am Safehouse ab.",
-                target: 1,
-                timer: 58,
-                to: getPoi("safehouse"),
-                minimumHeat: 5,
-                isBoss: true,
-                bossType: "helicopterHunt",
-                districtId: "downtown",
-                maxRiskLevel: 2,
-                bonus: { id: "quickFinish", label: "Aus dem Licht", description: "Finde frueh den Ausstieg.", target: 24, reward: 400 },
-            };
-        }
-        return {
-            type: "bossBlockade",
-            title: "Boss: Hafenblockade",
-            description: "Spreng die Sperre auf und finde den Ausweg durch die Docks.",
-            target: 2,
-            timer: 60,
-            to: { name: "Breakwater Gate", x: -44, z: -14 },
-            minimumHeat: 4,
-            isBoss: true,
-            bossType: "harborBlockade",
-            districtId: "harbor",
-            maxRiskLevel: 3,
-            bonus: { id: "noCrash", label: "Sauberer Durchbruch", description: "Ohne Einschlag durch die Blockade.", target: 1, reward: 430 },
-        };
+        return config;
     }
 
     function createDistrictAnchor(district) {

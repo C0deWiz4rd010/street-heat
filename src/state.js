@@ -40,6 +40,9 @@ export function createInitialState() {
             emp: 0,
         },
         mission: {
+            failed: false,
+            failTimer: 0,
+            failCost: 0,
             stage: 1,
             type: "pickup",
             target: 4,
@@ -168,6 +171,8 @@ export function createInitialState() {
             noBrake: false,
             forcedPursuit: false,
             timeAttack: false,
+            id: null,
+            reward: 1,
             label: "",
         },
         // Phase 5.3: police role assignments keyed by agent id

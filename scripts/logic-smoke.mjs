@@ -148,6 +148,29 @@ wallWorld.grid = { buildings: buildGrid(wallWorld.buildings, 6), obstacles: buil
 assert.equal(hasLineOfSight(wallWorld, -20, 0, 20, 0), false, "a building blocks the view");
 assert.equal(hasLineOfSight(wallWorld, -20, 12, 20, 12), true, "open street keeps the view");
 
+// --- Missions: declarative data resolves for every district and stage -----------------------
+const { BOSS_MISSIONS, MISSION_CHAINS, MISSION_MODIFIERS, resolveMission } = await import("../src/data/missions.js");
+const missionHelpers = {
+    getPoi: (id) => ({ name: id, x: 1, z: 2 }),
+    anchor: () => ({ name: "Zone", x: 3, z: 4 }),
+    route: (count) => Array.from({ length: count }, (_, i) => ({ name: `wp${i}`, x: i, z: i })),
+};
+assert.deepEqual(Object.keys(MISSION_CHAINS).sort(), DISTRICTS.map((district) => district.id).sort(), "every district needs a mission chain");
+for (const [districtId, chain] of Object.entries(MISSION_CHAINS)) {
+    assert.equal(chain.length, 3, `${districtId} chain has three steps`);
+    for (let stage = 1; stage <= 24; stage += 1) {
+        const config = resolveMission(chain[(stage - 1) % 3], stage, missionHelpers);
+        assert.ok(config.target > 0 && config.timer > 0, `${districtId} stage ${stage} needs target and timer`);
+        assert.ok(config.type === "pursuit" || config.to || config.route?.length === config.target, `${districtId} stage ${stage} needs a destination`);
+    }
+}
+assert.equal(resolveMission(MISSION_CHAINS.downtown[1], 1, missionHelpers).target, 3);
+assert.equal(resolveMission(MISSION_CHAINS.downtown[1], 19, missionHelpers).target, 5, "target scaling is capped");
+assert.equal(resolveMission(MISSION_CHAINS.downtown[0], 4, missionHelpers).timer, 54, "timer grows per stage block");
+assert.equal(BOSS_MISSIONS.length, 3);
+assert.ok(BOSS_MISSIONS.every((boss) => boss.isBoss && boss.bossType && boss.districtId));
+assert.ok(MISSION_MODIFIERS.every((modifier) => modifier.reward > 1), "modifiers must pay a bonus");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 
