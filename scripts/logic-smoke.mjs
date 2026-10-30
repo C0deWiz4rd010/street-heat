@@ -271,6 +271,26 @@ assert.ok(economy.rows.every((row) => row.price > 0 && Number.isFinite(row.runs)
 assert.ok(economy.rows.filter((row) => row.item.startsWith("Auto")).every((row) => row.runs >= 2.5 && row.runs <= 5.5), "a new car should cost roughly 3-5 typical runs");
 console.log(`economy: ~$${economy.perRun}/run -> ` + economy.rows.filter((row) => row.item.startsWith("Auto")).map((row) => `${row.item} ${row.runs.toFixed(1)} Runs`).join(", "));
 
+// --- Music data ----------------------------------------------------------------------------
+const music = await import("../src/music.js");
+assert.ok(music.semitoneHz(0) === 55 && Math.abs(music.semitoneHz(0, 1) - 110) < 1e-9, "octaves double the frequency");
+assert.ok(music.stepSeconds("menu") > music.stepSeconds("game"), "the menu track is slower");
+const calm = music.layerGains(0), warm = music.layerGains(2), hot = music.layerGains(4);
+assert.ok(calm.kick === 0 && calm.lead === 0 && calm.pad > 0, "heat 0 is calm: only pad and a soft bass");
+assert.ok(warm.kick > 0 && warm.snare === 0 && warm.lead === 0, "drums come in at heat 2");
+assert.ok(hot.kick > 0 && hot.snare > 0 && hot.lead > 0, "lead joins at heat 4");
+for (let h = 1; h <= 5; h += 1) {
+    const now = music.layerGains(h), before = music.layerGains(h - 1);
+    assert.ok(Object.keys(now).every((k) => now[k] >= before[k]), "layers only get louder with heat");
+}
+assert.equal(music.layerGains(5, "menu").kick, 0, "the menu track has no drums");
+assert.equal(music.musicModeFor("playing"), "game");
+assert.equal(music.musicModeFor("garage"), "menu");
+assert.equal(music.musicModeFor("gameover"), "off");
+assert.notEqual(music.chordRoot(0, "downtown"), music.chordRoot(0, "harbor"), "each district has its own key");
+assert.equal(music.chordRoot(4, "park"), music.chordRoot(0, "park"), "the progression loops every four bars");
+assert.ok([music.BASS_STEPS, music.KICK_STEPS, music.SNARE_STEPS, music.HAT_STEPS].every((p) => p.length === music.STEPS_PER_BAR), "patterns span one bar");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

@@ -181,6 +181,17 @@ controlsById("confirmYesBtn").addEventListener("click", () => {
     runtime.resetProfile();
 });
 
+// UI sounds: a tick when the pointer enters a button, a click when it is pressed.
+let lastHovered = null;
+document.addEventListener("mouseover", (event) => {
+    const button = event.target.closest?.("button");
+    if (button && button !== lastHovered && !button.disabled) audio.uiHover();
+    lastHovered = button ?? null;
+});
+document.addEventListener("click", (event) => {
+    if (event.target.closest?.("button")) audio.uiClick();
+});
+
 // Buttons keep focus after a click; drop it while driving so Space (drift) cannot re-trigger them.
 document.addEventListener("click", (event) => {
     if (state.screen === "playing" && !state.paused) event.target.closest?.("button")?.blur();
@@ -232,4 +243,4 @@ renderer.domElement.addEventListener("webglcontextlost", (event) => {
 
 animate();
 
-if (import.meta.env.DEV) window.__street = { state, post, runtime, renderer, ui };
+if (import.meta.env.DEV) window.__street = { state, post, runtime, renderer, ui, audio };

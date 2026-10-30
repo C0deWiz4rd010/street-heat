@@ -413,6 +413,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const turnInput = Math.abs(stick.x) > 0.12 ? clamp(-stick.x, -1, 1) : left - right;
         state.lastTurnInput = turnInput;
         const ctl = { forward: forward === 1, reverse: reverse === 1, handbrake, turn: turnInput };
+        player.throttle = ctl.forward ? 1 : ctl.reverse ? 0.3 : 0;
 
         // Forward/lateral axes from current rotation
         const fwdX = Math.sin(player.rotation);
@@ -566,6 +567,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             // Phase 3.1: less aggressive shake — only on real impact
             if (impactMag > 8) {
                 damagePlayer(impactMag * 0.7 / (mass * 0.75 + 0.25 + armorLevel * 0.18), "crash");
+                audio?.crash(impactMag / 22, { x: next.x, z: next.z });
                 state.cameraShake = Math.min(1, impactMag * 0.045);
                 spawnParticle(next.x, next.z, "#ff6a4f", 16);
             }
@@ -582,6 +584,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (impactMag > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
                 damagePlayer(impactMag * obstacleDamageScale / (mass * 0.75 + 0.25), "crash");
+                audio?.crash(impactMag / 26, { x: next.x, z: next.z });
                 state.cameraShake = Math.min(1, Math.max(impactMag * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
                 spawnParticle(next.x, next.z, destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d", destroyedReaction?.particleCount ?? 18);
             }
@@ -751,7 +754,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.stats.pickups += 1;
         state.lifetime.pickups += 1;
         refreshProgress();
-        audio?.collect();
+        audio?.pickup(pickup.type);
         spawnParticle(pickup.x, pickup.z, info.color, 16);
         setStatus(`${info.label} aufgenommen. +${Math.round(gained)} Score.`, 1.5);
         removeMesh(pickup.mesh);
@@ -947,7 +950,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         const sideHit = Math.abs(cross) > 0.7 ? 1.35 : 1;
                         const dmg = impactSpeed * 0.48 * (trafficMass / playerMass) * sideHit;
                         damagePlayer(dmg, "crash");
-                        audio?.crash();
+                        audio?.crash(impactSpeed / 14, { x: car.x, z: car.z });
                         state.cameraShake = Math.min(0.85, impactSpeed * 0.045);
                         spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
                         registerTrafficCrash();
@@ -1331,7 +1334,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 const crashDamage = impactSpeed * typeFactor * (agentMass / playerMass) * 0.5 / (1 + armorLevel * 0.18);
                 if (crashDamage > 0.5) {
                     damagePlayer(crashDamage, "crash");
-                    audio?.crash();
+                    audio?.crash(impactSpeed / 14, { x: agent.x, z: agent.z });
                     state.cameraShake = Math.min(0.9, impactSpeed * 0.05);
                     spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
                     state.cleanEscape && (state.cleanEscape.crashes = (state.cleanEscape.crashes ?? 0) + 1);
@@ -1387,11 +1390,16 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.wanted.status = state.wanted.level <= 0 ? "CLEAR" : near ? "CHASE" : "SEARCH";
 
         let nearestDist = Infinity;
+        let nearestAgent = null;
         for (const agent of police) {
             const d = distanceTo(agent.x, agent.z);
-            if (d < nearestDist) nearestDist = d;
+            if (d < nearestDist) {
+                nearestDist = d;
+                nearestAgent = agent;
+            }
         }
         state.nearestPoliceDistance = nearestDist;
+        state.nearestPoliceOffset = nearestAgent ? { x: nearestAgent.x - state.player.x, z: nearestAgent.z - state.player.z } : null;
     }
 
     function updateRoadblocks(dt) {
@@ -1409,7 +1417,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 applySpeedFactor(state.player, 0.32);
                 state.cameraShake = Math.max(state.cameraShake, 0.55);
                 state.stats.roadblocks += 1;
-                audio?.crash();
+                audio?.crash(0.8, { x: block.x, z: block.z });
                 spawnParticle(block.x, block.z, "#ff9c45", 26);
                 setStatus("Roadblock getroffen. Raus aus der Linie.", 1.8);
             }
@@ -1469,6 +1477,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     applySpeedFactor(state.player, 0.35);
                     state.player.nitro = Math.max(0, state.player.nitro - 22);
                     spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
+                    audio?.tireBurst();
                     setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
                     removeMesh(hazard.mesh);
                     hazards.splice(index, 1);
@@ -2333,6 +2342,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             cooldown: 0,
             tactical: Boolean(options.tactical),
         });
+        audio?.warning("roadblock");
         setStatus(options.sourceAgent?.unitType === "van" ? "Police Van: Sperre auf deiner Linie." : "Dispatch: Roadblock voraus.", 1.7);
     }
 
@@ -2360,6 +2370,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         scene.add(mesh);
         mesh.visible = false;
         hazards.push({ mesh, x, z, radius: 3.2, life: 12, maxLife: 12, warn: 2.4, kind: "spike" });
+        audio?.warning("spike");
         setStatus("Warnung: Spike-Strip voraus! Siehe Minimap.", 2.2);
     }
 
@@ -2430,6 +2441,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function triggerEmp(x, z) {
+        audio?.emp();
         let disabled = 0;
         for (let index = police.length - 1; index >= 0; index -= 1) {
             const agent = police[index];
@@ -2542,6 +2554,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.player.health = 0;
             state.running = false;
             state.screen = "gameover";
+            audio?.gameOver();
             state.stats.newRecord = Math.round(state.score) > state.bestScore;
             state.bestScore = Math.max(state.bestScore, Math.round(state.score));
             persistProfile();
@@ -2565,6 +2578,9 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.wanted.tier = getHeatTier().name;
         if (state.wanted.level > previous) {
             state.cameraShake = Math.max(state.cameraShake, 0.12 + state.wanted.level * 0.03);
+            if (state.running) audio?.stinger(state.wanted.level, true);
+        } else if (state.wanted.level < previous && state.running) {
+            audio?.stinger(state.wanted.level, false);
         }
     }
 
@@ -2700,7 +2716,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 state.stats.unlocked.push(achievement.label);
                 addCash(achievement.reward);
                 setStatus(`Achievement: ${achievement.label}. +$${achievement.reward}`, 3);
-                audio?.upgrade();
+                audio?.achievement();
             }
         }
         persistProfile();
@@ -3278,6 +3294,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             lightningTimer -= dt;
             if (lightningTimer <= 0) {
                 post.flashLightning(1);
+                audio?.thunder(0.3 + Math.random() * 0.9);
                 secondFlash = 0.16 + Math.random() * 0.12;
                 lightningTimer = 3 + Math.random() * 7;
             }
