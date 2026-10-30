@@ -1,15 +1,136 @@
 import * as THREE from "three";
 import { CONFIG, DISTRICTS, POIS } from "./config.js";
 import { markShared } from "./effects.js";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
 import { createMaterial } from "./vehicles.js";
 
+const WORLD_SEED = 0x57ee7;
+const NEON_COLORS = [[3.2, 0.45, 1.7], [0.5, 2.6, 3.2], [1.9, 0.8, 3.4]];
+const LAMP_TINTS = { downtown: "#ff7ad9", industrial: "#ff9a3c", park: "#ffd9a0", harbor: "#7fc4ff" };
+
+function mulberry32(seed) {
+    let a = seed >>> 0;
+    return () => {
+        a = (a + 0x6d2b79f5) >>> 0;
+        let t = a;
+        t = Math.imul(t ^ (t >>> 15), t | 1);
+        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+    };
+}
+
+let random = mulberry32(WORLD_SEED);
+
+// Collected while the world is built, then flushed into one InstancedMesh per kind.
+let sink = null;
+function createSink() {
+    return {
+        windows: [], neon: [], markings: [], crosswalks: [], sidewalks: [], trunks: [], crownsSphere: [], crownsCone: [],
+        antennas: [], bollards: [], benches: [], beaconsA: [], beaconsB: [], puddles: [],
+    };
+}
+
+const dummy = new THREE.Object3D();
+const tmpColor = new THREE.Color();
+
+function flushInstances(scene, geometry, material, list, { shadow = false, receive = false } = {}) {
+    if (!list.length) return null;
+    const mesh = new THREE.InstancedMesh(geometry, material, list.length);
+    list.forEach((item, index) => {
+        dummy.position.set(item.x, item.y, item.z);
+        dummy.rotation.set(0, item.ry ?? 0, 0);
+        dummy.scale.set(item.sx ?? 1, item.sy ?? 1, item.sz ?? 1);
+        dummy.updateMatrix();
+        mesh.setMatrixAt(index, dummy.matrix);
+        if (item.color) {
+            if (Array.isArray(item.color)) tmpColor.setRGB(item.color[0], item.color[1], item.color[2]);
+            else tmpColor.set(item.color);
+            mesh.setColorAt(index, tmpColor);
+        }
+    });
+    mesh.instanceMatrix.needsUpdate = true;
+    if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+    mesh.castShadow = shadow;
+    mesh.receiveShadow = receive;
+    mesh.frustumCulled = false;
+    scene.add(mesh);
+    return mesh;
+}
+
+function canvasTexture(size, draw) {
+    const canvas = document.createElement("canvas");
+    canvas.width = size;
+    canvas.height = size;
+    draw(canvas.getContext("2d"), size);
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.RepeatWrapping;
+    return texture;
+}
+
+let hazardMaterial = null;
+function getHazardMaterial() {
+    if (!hazardMaterial) {
+        const map = canvasTexture(64, (ctx, size) => {
+            ctx.fillStyle = "#e8b923";
+            ctx.fillRect(0, 0, size, size);
+            ctx.fillStyle = "#16181b";
+            for (let i = -size; i < size * 2; i += 32) {
+                ctx.beginPath();
+                ctx.moveTo(i, 0);
+                ctx.lineTo(i + 16, 0);
+                ctx.lineTo(i + 16 - size, size);
+                ctx.lineTo(i - size, size);
+                ctx.fill();
+            }
+        });
+        map.repeat.set(1, 9);
+        hazardMaterial = createMaterial("#ffffff", { roughness: 0.7, metalness: 0.04 });
+        hazardMaterial.map = map;
+    }
+    return hazardMaterial;
+}
+
+function createWaterMaterial() {
+    const bumpMap = canvasTexture(128, (ctx, size) => {
+        const rng = mulberry32(7);
+        ctx.fillStyle = "#808080";
+        ctx.fillRect(0, 0, size, size);
+        for (let i = 0; i < 260; i += 1) {
+            const x = rng() * size;
+            const y = rng() * size;
+            const r = 3 + rng() * 9;
+            const g = ctx.createRadialGradient(x, y, 0, x, y, r);
+            const v = rng() < 0.5 ? 255 : 0;
+            g.addColorStop(0, `rgba(${v},${v},${v},0.35)`);
+            g.addColorStop(1, "rgba(128,128,128,0)");
+            ctx.fillStyle = g;
+            ctx.fillRect(x - r, y - r, r * 2, r * 2);
+        }
+    });
+    bumpMap.repeat.set(3, 3);
+    return new THREE.MeshStandardMaterial({
+        color: "#15506f",
+        roughness: 0.12,
+        metalness: 0.6,
+        emissive: "#0a2c42",
+        emissiveIntensity: 0.4,
+        bumpMap,
+        bumpScale: 2.2,
+    });
+}
+
 export function createWorld(scene, sharedMaterials) {
+    random = mulberry32(WORLD_SEED);
+    sink = createSink();
     const buildings = [];
     const obstacles = [];
     const objects = [];
     const shortcutZones = [];
     const scannerZones = [];
     const districtMaterials = createDistrictMaterials(sharedMaterials);
+    const waterMaterial = createWaterMaterial();
+    districtMaterials.harborWater = waterMaterial;
 
     const ground = new THREE.Mesh(
         new THREE.BoxGeometry(CONFIG.map.size + 32, 0.28, CONFIG.map.size + 32),
@@ -19,25 +140,12 @@ export function createWorld(scene, sharedMaterials) {
     ground.receiveShadow = true;
     scene.add(ground);
 
-    for (const district of DISTRICTS) {
-        const districtMat = createMaterial(district.color, {
-            roughness: 0.9,
-            metalness: 0.02,
-            transparent: true,
-            opacity: 0.15,
-        });
-        const marker = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2, 0.03, CONFIG.map.size / 2), districtMat);
-        marker.position.set(district.x * CONFIG.map.size / 4, -0.005, district.z * CONFIG.map.size / 4);
-        marker.receiveShadow = true;
-        scene.add(marker);
-    }
-
     for (const sx of CONFIG.map.streets) {
         const road = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.streetWidth, 0.08, CONFIG.map.size + 16), sharedMaterials.asphalt);
         road.position.set(sx, 0.01, 0);
         road.receiveShadow = true;
         scene.add(road);
-        addRoadMarkings(scene, sharedMaterials, true, sx);
+        addRoadMarkings(true, sx);
     }
 
     for (const sz of CONFIG.map.streets) {
@@ -45,7 +153,7 @@ export function createWorld(scene, sharedMaterials) {
         road.position.set(0, 0.02, sz);
         road.receiveShadow = true;
         scene.add(road);
-        addRoadMarkings(scene, sharedMaterials, false, sz);
+        addRoadMarkings(false, sz);
     }
 
     for (const bx of CONFIG.map.blockCenters) {
@@ -70,8 +178,9 @@ export function createWorld(scene, sharedMaterials) {
     for (const sx of CONFIG.map.streets) {
         for (const sz of CONFIG.map.streets) {
             const district = getDistrictForPosition(sx, sz);
-            createLamp(scene, obstacles, sx + 8.8, sz + 8.8, district.color);
-            createLamp(scene, obstacles, sx - 8.8, sz - 8.8, district.color);
+            const lampTint = LAMP_TINTS[district.id] ?? district.color;
+            createLamp(scene, obstacles, sx + 8.8, sz + 8.8, lampTint);
+            createLamp(scene, obstacles, sx - 8.8, sz - 8.8, lampTint);
         }
     }
 
@@ -82,8 +191,7 @@ export function createWorld(scene, sharedMaterials) {
     }
 
     // Harbor: large water base plane under the entire quadrant
-    const harborBaseMat = new THREE.MeshStandardMaterial({ color: "#14405e", roughness: 0.12, metalness: 0.55, transparent: true, opacity: 0.82 });
-    const harborBase = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 4, 0.07, CONFIG.map.size / 2 - 4), harborBaseMat);
+    const harborBase = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 4, 0.07, CONFIG.map.size / 2 - 4), waterMaterial);
     harborBase.position.set(-CONFIG.map.size / 4, -0.08, -CONFIG.map.size / 4);
     harborBase.receiveShadow = true;
     scene.add(harborBase);
@@ -98,8 +206,7 @@ export function createWorld(scene, sharedMaterials) {
     createSmokestack(scene, objects, -38, 38);
 
     // Park: large central lake
-    const parkLakeMat = new THREE.MeshStandardMaterial({ color: "#1c4d72", roughness: 0.08, metalness: 0.45, transparent: true, opacity: 0.84 });
-    const parkLake = new THREE.Mesh(new THREE.CylinderGeometry(10, 10.5, 0.1, 32), parkLakeMat);
+    const parkLake = new THREE.Mesh(new THREE.CylinderGeometry(10, 10.5, 0.1, 32), waterMaterial);
     parkLake.scale.z = 0.72;
     parkLake.position.set(35, -0.02, -35);
     parkLake.receiveShadow = true;
@@ -107,22 +214,46 @@ export function createWorld(scene, sharedMaterials) {
     objects.push(parkLake);
 
     // Harbor: extra dock water accent strips near edges
-    const dockWaterMat = new THREE.MeshStandardMaterial({ color: "#0f3550", roughness: 0.1, metalness: 0.6, transparent: true, opacity: 0.9 });
-    const dockWaterEast = new THREE.Mesh(new THREE.BoxGeometry(6, 0.07, CONFIG.map.size / 2 - 2), dockWaterMat.clone());
+    const dockWaterEast = new THREE.Mesh(new THREE.BoxGeometry(6, 0.07, CONFIG.map.size / 2 - 2), waterMaterial);
     dockWaterEast.position.set(-CONFIG.map.size / 2 + 3, -0.06, -CONFIG.map.size / 4);
     scene.add(dockWaterEast);
-    const dockWaterNorth = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 2, 0.07, 6), dockWaterMat.clone());
+    const dockWaterNorth = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.size / 2 - 2, 0.07, 6), waterMaterial);
     dockWaterNorth.position.set(-CONFIG.map.size / 4, -0.06, -CONFIG.map.size / 2 + 3);
     scene.add(dockWaterNorth);
 
+    createShip(scene, objects);
     createScannerZones(scene, scannerZones);
+
+    addStreetFurniture();
+    const handles = flushWorldInstances(scene, sharedMaterials);
+    const waterBump = waterMaterial.bumpMap;
+    let visualTime = 0;
+    const WINDOW_DAY = new THREE.Color(0.3, 0.42, 0.52);
+    const WINDOW_NIGHT = new THREE.Color(2.4, 2.4, 2.4);
+
+    /** night: 0 (day) .. 1 (night), wet: 0 .. 1. Cheap enough to call every frame. */
+    function updateVisuals(dt, night, wet) {
+        visualTime += dt;
+        waterBump.offset.set(visualTime * 0.012, visualTime * 0.02);
+        handles.windowMaterial.color.copy(WINDOW_DAY).lerp(WINDOW_NIGHT, night);
+        const neon = 0.8 + night * 1.2;
+        handles.neonMaterial.color.setRGB(neon, neon, neon);
+        for (let i = 0; i < 2; i += 1) {
+            const pulse = Math.sin(visualTime * 3.2 + i * Math.PI) > 0.2 ? 1 : 0.12;
+            const level = (0.5 + night * 2.5) * pulse;
+            handles.beaconMaterials[i].color.setRGB(level, level * 0.1, level * 0.1);
+        }
+        sharedMaterials.asphalt.roughness = 0.92 - wet * 0.62;
+        sharedMaterials.asphalt.metalness = 0.03 + wet * 0.2;
+        if (handles.puddleMaterial) handles.puddleMaterial.opacity = wet * 0.85;
+    }
 
     const grid = {
         buildings: buildGrid(buildings, 6),
         obstacles: buildGrid(obstacles, 8),
     };
 
-    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones, grid };
+    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones, grid, updateVisuals };
 }
 
 // Uniform grid: each item is registered in every cell its (margin-expanded) box touches,
@@ -273,21 +404,23 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
         { x: -4.8, z: 4.6 },
         { x: 4.6, z: 4.5 },
     ]);
-    const buildingCount = 2 + Math.floor(Math.random() * 2) + (Math.random() < 0.5 ? 1 : 0);
+    const buildingCount = 2 + Math.floor(random() * 2) + (random() < 0.5 ? 1 : 0);
 
     for (let index = 0; index < buildingCount; index += 1) {
         const slot = slots[index];
-        const width = 4.4 + Math.random() * 2.1;
-        const depth = 4.3 + Math.random() * 2.4;
-        const height = 14 + Math.random() * 18;
-        const x = bx + slot.x + (Math.random() - 0.5) * 0.8;
-        const z = bz + slot.z + (Math.random() - 0.5) * 0.8;
+        const width = 4.4 + random() * 2.1;
+        const depth = 4.3 + random() * 2.4;
+        const height = 14 + random() * 18;
+        const x = bx + slot.x + (random() - 0.5) * 0.8;
+        const z = bz + slot.z + (random() - 0.5) * 0.8;
         const tower = createBuilding(width, depth, height, x, z, {
-            baseHue: 0.57 + Math.random() * 0.05,
+            baseHue: 0.57 + random() * 0.05,
             saturation: 0.16,
-            lightness: 0.34 + Math.random() * 0.1,
+            lightness: 0.34 + random() * 0.1,
             roofColor: "#0f141b",
-            windowMaterial: materials.skylineGlass,
+            windowKind: "cool",
+            neon: true,
+            antenna: true,
         });
         scene.add(tower);
         objects.push(tower);
@@ -304,8 +437,8 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
     objects.push(median);
 
     for (let index = 0; index < 3; index += 1) {
-        const x = bx + (Math.random() - 0.5) * (CONFIG.map.blockSize - 2.5);
-        const z = bz + (Math.random() - 0.5) * (CONFIG.map.blockSize - 2.5);
+        const x = bx + (random() - 0.5) * (CONFIG.map.blockSize - 2.5);
+        const z = bz + (random() - 0.5) * (CONFIG.map.blockSize - 2.5);
         if (!insideBuilding({ buildings }, x, z, 1.4)) {
             const prop = createStreetProp(x, z, index, materials.kioskAccent);
             scene.add(prop);
@@ -316,7 +449,7 @@ function decorateDowntownBlock(scene, objects, buildings, obstacles, materials, 
 }
 
 function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials, bx, bz) {
-    const stripeMat = createMaterial("#d9c8a1", { roughness: 0.72, metalness: 0.04 });
+    const stripeMat = getHazardMaterial();
     for (const offset of [-3.8, 0, 3.8]) {
         const stripe = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.03, CONFIG.map.blockSize * 0.8), stripeMat);
         stripe.position.set(bx + offset, 0.11, bz);
@@ -324,7 +457,18 @@ function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials
         scene.add(stripe);
     }
 
-    const warehouseCount = 1 + Math.floor(Math.random() * 2);
+    {
+        const tankX = bx + (random() < 0.5 ? -6.2 : 6.2);
+        const tankZ = bz + (random() < 0.5 ? -6.4 : 6.4);
+        const tank = new THREE.Mesh(new THREE.CylinderGeometry(1.5, 1.5, 3.6, 18), createMaterial("#8b939a", { roughness: 0.4, metalness: 0.55 }));
+        tank.position.set(tankX, 1.9, tankZ);
+        tank.castShadow = true;
+        scene.add(tank);
+        objects.push(tank);
+        obstacles.push({ x: tankX, z: tankZ, radius: 1.7, type: "tank", label: "Tank", reward: 0, color: "#8b939a", mesh: tank });
+    }
+
+    const warehouseCount = 1 + Math.floor(random() * 2);
     const warehouseSlots = shuffle([
         { x: -3.6, z: 0.8 },
         { x: 3.2, z: -2.4 },
@@ -333,86 +477,86 @@ function decorateIndustrialBlock(scene, objects, buildings, obstacles, materials
 
     for (let index = 0; index < warehouseCount; index += 1) {
         const slot = warehouseSlots[index];
-        const width = 8.4 + Math.random() * 3.5;
-        const depth = 6.4 + Math.random() * 2.7;
-        const height = 5.4 + Math.random() * 3.6;
+        const width = 8.4 + random() * 3.5;
+        const depth = 6.4 + random() * 2.7;
+        const height = 5.4 + random() * 3.6;
         const x = bx + slot.x;
         const z = bz + slot.z;
         const warehouse = createBuilding(width, depth, height, x, z, {
-            baseHue: 0.08 + Math.random() * 0.04,
+            baseHue: 0.08 + random() * 0.04,
             saturation: 0.1,
-            lightness: 0.38 + Math.random() * 0.06,
+            lightness: 0.38 + random() * 0.06,
             roofColor: "#252a30",
-            windowMaterial: createMaterial("#f0d48a", {
-                roughness: 0.18,
-                metalness: 0.3,
-                emissive: "#8d6928",
-                emissiveIntensity: 0.22,
-            }),
+            windowKind: "warm",
         });
         scene.add(warehouse);
         objects.push(warehouse);
         buildings.push({ x, z, hw: width / 2 + 0.8, hd: depth / 2 + 0.8, h: height });
+        const pipe = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.16, width, 8), createMaterial("#b8692f", { roughness: 0.5, metalness: 0.5 }));
+        pipe.rotation.z = Math.PI / 2;
+        pipe.position.set(x, 2.4, z + depth / 2 + 0.28);
+        scene.add(pipe);
+        objects.push(pipe);
     }
 
-    const stacks = 3 + Math.floor(Math.random() * 2);
+    const stacks = 3 + Math.floor(random() * 2);
     for (let index = 0; index < stacks; index += 1) {
-        const x = bx + (Math.random() - 0.5) * (CONFIG.map.blockSize - 5);
-        const z = bz + (Math.random() - 0.5) * (CONFIG.map.blockSize - 5);
+        const x = bx + (random() - 0.5) * (CONFIG.map.blockSize - 5);
+        const z = bz + (random() - 0.5) * (CONFIG.map.blockSize - 5);
         if (insideBuilding({ buildings }, x, z, 1.6)) continue;
-        const stack = createContainerStack(x, z, materials, 2 + Math.floor(Math.random() * 2));
+        const stack = createContainerStack(x, z, materials, 2 + Math.floor(random() * 2));
         scene.add(stack.mesh);
         objects.push(stack.mesh);
         obstacles.push({ x, z, radius: stack.radius, type: "containerStack", label: "Container", reward: 0, color: "#7fa0b2", mesh: stack.mesh });
     }
 
     for (let index = 0; index < 4; index += 1) {
-        const x = bx + (Math.random() - 0.5) * (CONFIG.map.blockSize - 3);
-        const z = bz + (Math.random() - 0.5) * (CONFIG.map.blockSize - 3);
+        const x = bx + (random() - 0.5) * (CONFIG.map.blockSize - 3);
+        const z = bz + (random() - 0.5) * (CONFIG.map.blockSize - 3);
         if (insideBuilding({ buildings }, x, z, 1.2)) continue;
-        const prop = Math.random() < 0.55
-            ? createCrateStackProp(x, z, 2 + Math.floor(Math.random() * 2))
+        const prop = random() < 0.55
+            ? createCrateStackProp(x, z, 2 + Math.floor(random() * 2))
             : createConstructionBeacon(x, z, index);
         scene.add(prop);
         objects.push(prop);
         appendObstacleFromMesh(obstacles, prop, x, z);
     }
 
-    const fence = createFenceSegment(bx, bz - 6.1, "x", 4 + Math.floor(Math.random() * 2));
+    const fence = createFenceSegment(bx, bz - 6.1, "x", 4 + Math.floor(random() * 2));
     scene.add(fence);
     objects.push(fence);
     appendObstacleFromMesh(obstacles, fence, bx, bz - 6.1);
 }
 
 function decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, materials, bx, bz) {
-    const pathOffsetZ = (Math.random() - 0.5) * 2;
+    const pathOffsetZ = (random() - 0.5) * 2;
     const pathX = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.blockSize * 0.9, 0.04, 2.4), materials.parkPath);
     pathX.position.set(bx, 0.12, bz + pathOffsetZ);
     pathX.receiveShadow = true;
     scene.add(pathX);
     shortcutZones.push({ x: bx, z: bz + pathOffsetZ, width: CONFIG.map.blockSize * 0.9, depth: 2.8 });
 
-    const pathOffsetX = (Math.random() - 0.5) * 2;
+    const pathOffsetX = (random() - 0.5) * 2;
     const pathZ = new THREE.Mesh(new THREE.BoxGeometry(2.4, 0.04, CONFIG.map.blockSize * 0.9), materials.parkPath);
     pathZ.position.set(bx + pathOffsetX, 0.12, bz);
     pathZ.receiveShadow = true;
     scene.add(pathZ);
     shortcutZones.push({ x: bx + pathOffsetX, z: bz, width: 2.8, depth: CONFIG.map.blockSize * 0.9 });
 
-    if (Math.random() < 0.55) {
+    if (random() < 0.55) {
         const pond = new THREE.Mesh(
             new THREE.CylinderGeometry(2.2, 2.8, 0.08, 22),
-            createMaterial("#4ea2b8", { roughness: 0.22, metalness: 0.22, emissive: "#1e4a5d", emissiveIntensity: 0.16 })
+            materials.harborWater
         );
         pond.scale.z = 1.35;
-        pond.position.set(bx + (Math.random() - 0.5) * 5, 0.08, bz + (Math.random() - 0.5) * 5);
+        pond.position.set(bx + (random() - 0.5) * 5, 0.08, bz + (random() - 0.5) * 5);
         pond.receiveShadow = true;
         scene.add(pond);
         objects.push(pond);
     }
 
-    if (Math.random() < 0.4) {
-        const pavilion = createPavilion(bx + (Math.random() - 0.5) * 3, bz + (Math.random() - 0.5) * 3);
+    if (random() < 0.4) {
+        const pavilion = createPavilion(bx + (random() - 0.5) * 3, bz + (random() - 0.5) * 3);
         scene.add(pavilion);
         objects.push(pavilion);
         obstacles.push({
@@ -427,19 +571,26 @@ function decorateParkBlock(scene, objects, buildings, obstacles, shortcutZones, 
         });
     }
 
-    const treeCount = 6 + Math.floor(Math.random() * 4);
+    for (const [bxo, bzo, ry] of [[3.4, 4.2, 0], [-4.2, -3.6, Math.PI]]) {
+        const benchX = bx + bxo;
+        const benchZ = bz + bzo;
+        if (insideBuilding({ buildings }, benchX, benchZ, 1.2)) continue;
+        sink.benches.push({ x: benchX, y: 0.2, z: benchZ, ry });
+        obstacles.push({ x: benchX, z: benchZ, radius: 0.9, type: "bench", label: "Bank", reward: 0, color: "#8a6a44" });
+    }
+
+    const treeCount = 6 + Math.floor(random() * 4);
     for (let index = 0; index < treeCount; index += 1) {
-        const x = bx + (Math.random() - 0.5) * (CONFIG.map.blockSize - 2);
-        const z = bz + (Math.random() - 0.5) * (CONFIG.map.blockSize - 2);
+        const x = bx + (random() - 0.5) * (CONFIG.map.blockSize - 2);
+        const z = bz + (random() - 0.5) * (CONFIG.map.blockSize - 2);
         if (!insideBuilding({ buildings }, x, z, 1.7)) {
-            const tree = createTree(x, z);
-            scene.add(tree);
+            addTree(x, z);
             obstacles.push({ x, z, radius: 1.8, type: "tree" });
         }
     }
 
-    if (Math.random() < 0.55) {
-        const fence = createFenceSegment(bx + (Math.random() - 0.5) * 4, bz + (Math.random() - 0.5) * 4, Math.random() < 0.5 ? "x" : "z", 3);
+    if (random() < 0.55) {
+        const fence = createFenceSegment(bx + (random() - 0.5) * 4, bz + (random() - 0.5) * 4, random() < 0.5 ? "x" : "z", 3);
         scene.add(fence);
         objects.push(fence);
         appendObstacleFromMesh(obstacles, fence, fence.position.x, fence.position.z);
@@ -455,6 +606,7 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
         water.position.set(bx - 5.8, 0.03, bz);
         scene.add(water);
 
+        for (let i = -3; i <= 3; i += 1) sink.bollards.push({ x: bx - 2.9, y: 0.4, z: bz + i * 2.6 });
         const edge = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.26, CONFIG.map.blockSize * 0.96), materials.harborEdge);
         edge.position.set(bx - 2.6, 0.18, bz);
         edge.castShadow = true;
@@ -466,15 +618,16 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
         water.position.set(bx, 0.03, bz - 5.8);
         scene.add(water);
 
+        for (let i = -3; i <= 3; i += 1) sink.bollards.push({ x: bx + i * 2.6, y: 0.4, z: bz - 2.9 });
         const edge = new THREE.Mesh(new THREE.BoxGeometry(CONFIG.map.blockSize * 0.96, 0.26, 0.28), materials.harborEdge);
         edge.position.set(bx, 0.18, bz - 2.6);
         edge.castShadow = true;
         scene.add(edge);
     }
 
-    const warehouseWidth = 8 + Math.random() * 2.4;
-    const warehouseDepth = 6.2 + Math.random() * 2;
-    const warehouseHeight = 5.6 + Math.random() * 2.6;
+    const warehouseWidth = 8 + random() * 2.4;
+    const warehouseDepth = 6.2 + random() * 2;
+    const warehouseHeight = 5.6 + random() * 2.6;
     const warehouseX = bx + 3.3;
     const warehouseZ = bz + 2.2;
     const warehouse = createBuilding(warehouseWidth, warehouseDepth, warehouseHeight, warehouseX, warehouseZ, {
@@ -482,39 +635,41 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
         saturation: 0.11,
         lightness: 0.42,
         roofColor: "#24303a",
-        windowMaterial: createMaterial("#b8dcff", { roughness: 0.2, metalness: 0.36, emissive: "#28465c", emissiveIntensity: 0.16 }),
+        windowKind: "cool",
     });
     scene.add(warehouse);
     objects.push(warehouse);
     buildings.push({ x: warehouseX, z: warehouseZ, hw: warehouseWidth / 2 + 0.8, hd: warehouseDepth / 2 + 0.8, h: warehouseHeight });
 
-    const stacks = 2 + Math.floor(Math.random() * 3);
+    const stacks = 2 + Math.floor(random() * 3);
     for (let index = 0; index < stacks; index += 1) {
-        const x = bx + (Math.random() - 0.5) * 8 - 2;
-        const z = bz + (Math.random() - 0.5) * 7 + 1;
+        const x = bx + (random() - 0.5) * 8 - 2;
+        const z = bz + (random() - 0.5) * 7 + 1;
         if (insideBuilding({ buildings }, x, z, 1.6)) continue;
-        const stack = createContainerStack(x, z, materials, 2 + Math.floor(Math.random() * 2));
+        const stack = createContainerStack(x, z, materials, 2 + Math.floor(random() * 2));
         scene.add(stack.mesh);
         objects.push(stack.mesh);
         obstacles.push({ x, z, radius: stack.radius, type: "dockContainer", label: "Dock-Container", reward: 0, color: "#5a8ba8", mesh: stack.mesh });
     }
 
-    if (Math.random() < 0.8) {
+    if (random() < 0.8) {
         const crane = createDockCrane(bx - 3.6, bz + 3.5, materials.crane);
         scene.add(crane);
         objects.push(crane);
+        sink.beaconsA.push({ x: bx - 3.6 + 4.9, y: 7.6, z: bz + 3.5 });
+        sink.beaconsB.push({ x: bx - 3.6, y: 8.1, z: bz + 3.5 });
         obstacles.push({ x: bx - 3.6, z: bz + 3.5, radius: 1.45, type: "crane", label: "Kran", reward: 0, color: "#d29549", mesh: crane });
     }
 
-    if (Math.random() < 0.7) {
+    if (random() < 0.7) {
         const ramp = createDockRamp(bx - 0.4, bz - 3.6, materials.ramp);
         scene.add(ramp);
         objects.push(ramp);
     }
 
     for (let index = 0; index < 3; index += 1) {
-        const x = bx + (Math.random() - 0.5) * 9 - 1.5;
-        const z = bz + (Math.random() - 0.5) * 7 + 0.5;
+        const x = bx + (random() - 0.5) * 9 - 1.5;
+        const z = bz + (random() - 0.5) * 7 + 0.5;
         if (insideBuilding({ buildings }, x, z, 1.1)) continue;
         const crate = createHarborCrateProp(x, z, index);
         scene.add(crate);
@@ -523,23 +678,127 @@ function decorateHarborBlock(scene, objects, buildings, obstacles, materials, bx
     }
 }
 
-function addRoadMarkings(scene, sharedMaterials, vertical, pos) {
+function addRoadMarkings(vertical, pos) {
     for (let value = -CONFIG.map.size / 2; value <= CONFIG.map.size / 2; value += 6) {
-        const line = new THREE.Mesh(
-            vertical ? new THREE.BoxGeometry(0.22, 0.045, 2.8) : new THREE.BoxGeometry(2.8, 0.045, 0.22),
-            sharedMaterials.line
-        );
-        line.position.set(vertical ? pos : value, 0.09, vertical ? value : pos);
-        line.receiveShadow = true;
-        scene.add(line);
+        sink.markings.push({
+            x: vertical ? pos : value,
+            y: 0.09,
+            z: vertical ? value : pos,
+            ry: vertical ? 0 : Math.PI / 2,
+        });
     }
+}
+
+function addStreetFurniture() {
+    const width = CONFIG.map.streetWidth;
+    const barCount = Math.floor(width / 0.95);
+    for (const sx of CONFIG.map.streets) {
+        for (const sz of CONFIG.map.streets) {
+            for (const dir of [-1, 1]) {
+                const offset = width / 2 + 1.5;
+                for (let i = 0; i < barCount; i += 1) {
+                    const across = (i - (barCount - 1) / 2) * 0.95;
+                    sink.crosswalks.push({ x: sx + dir * offset, y: 0.12, z: sz + across, ry: 0 });
+                    sink.crosswalks.push({ x: sx + across, y: 0.12, z: sz + dir * offset, ry: Math.PI / 2 });
+                }
+            }
+        }
+    }
+    const half = CONFIG.map.blockSize / 2;
+    for (const bx of CONFIG.map.blockCenters) {
+        for (const bz of CONFIG.map.blockCenters) {
+            const id = getDistrictForPosition(bx, bz).id;
+            if (id === "park") continue;
+            const inset = 0.55;
+            const shade = id === "harbor" ? "#7c8791" : "#9a978f";
+            sink.sidewalks.push({ x: bx, y: 0.19, z: bz - half + inset, sx: CONFIG.map.blockSize, sz: 1.1, color: shade });
+            sink.sidewalks.push({ x: bx, y: 0.19, z: bz + half - inset, sx: CONFIG.map.blockSize, sz: 1.1, color: shade });
+            sink.sidewalks.push({ x: bx - half + inset, y: 0.19, z: bz, sx: 1.1, sz: CONFIG.map.blockSize - 2.2, color: shade });
+            sink.sidewalks.push({ x: bx + half - inset, y: 0.19, z: bz, sx: 1.1, sz: CONFIG.map.blockSize - 2.2, color: shade });
+        }
+    }
+    for (let i = 0; i < 46; i += 1) {
+        const onVertical = random() < 0.5;
+        const street = CONFIG.map.streets[Math.floor(random() * CONFIG.map.streets.length)];
+        const along = (random() - 0.5) * (CONFIG.map.size - 16);
+        const across = (random() - 0.5) * (width - 1.6);
+        const size = 0.9 + random() * 1.4;
+        sink.puddles.push({
+            x: onVertical ? street + across : along,
+            y: 0.115,
+            z: onVertical ? along : street + across,
+            ry: random() * Math.PI,
+            sx: size * (1.2 + random() * 0.8),
+            sz: size,
+        });
+    }
+}
+
+function flushWorldInstances(scene, sharedMaterials) {
+    const handles = {};
+
+    handles.markings = flushInstances(scene, new THREE.BoxGeometry(0.22, 0.045, 2.8), sharedMaterials.line, sink.markings, { receive: true });
+
+    const crosswalkMat = new THREE.MeshStandardMaterial({ color: "#d8d4c6", roughness: 0.6 });
+    handles.crosswalks = flushInstances(scene, new THREE.BoxGeometry(1.7, 0.03, 0.5), crosswalkMat, sink.crosswalks, { receive: true });
+
+    const sidewalkMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.78, metalness: 0.02 });
+    handles.sidewalks = flushInstances(scene, new THREE.BoxGeometry(1, 0.06, 1), sidewalkMat, sink.sidewalks, { receive: true });
+
+    // One shared emissive-style material for every window; colour is raised at night so bloom picks it up.
+    const windowMaterial = new THREE.MeshBasicMaterial({ color: "#ffffff" });
+    handles.windowMaterial = windowMaterial;
+    handles.windows = flushInstances(scene, new THREE.BoxGeometry(0.55, 0.85, 0.08), windowMaterial, sink.windows);
+
+    const neonMaterial = new THREE.MeshBasicMaterial({ color: "#ffffff", side: THREE.DoubleSide });
+    handles.neonMaterial = neonMaterial;
+    handles.neon = flushInstances(scene, new THREE.PlaneGeometry(1, 1), neonMaterial, sink.neon);
+
+    const darkMetal = new THREE.MeshStandardMaterial({ color: "#2a323a", roughness: 0.5, metalness: 0.6 });
+    flushInstances(scene, new THREE.CylinderGeometry(0.05, 0.08, 1, 6), darkMetal, sink.antennas, { shadow: true });
+
+    const beaconGeometry = new THREE.SphereGeometry(0.22, 8, 6);
+    handles.beaconMaterials = [
+        new THREE.MeshBasicMaterial({ color: "#ff2a2a" }),
+        new THREE.MeshBasicMaterial({ color: "#ff2a2a" }),
+    ];
+    flushInstances(scene, beaconGeometry, handles.beaconMaterials[0], sink.beaconsA);
+    flushInstances(scene, beaconGeometry, handles.beaconMaterials[1], sink.beaconsB);
+
+    flushInstances(scene, new THREE.CylinderGeometry(0.2, 0.32, 2.2, 8), new THREE.MeshStandardMaterial({ color: "#77583a", roughness: 0.8 }), sink.trunks, { shadow: true });
+    const crownMat = new THREE.MeshStandardMaterial({ color: "#ffffff", roughness: 0.78 });
+    flushInstances(scene, new THREE.SphereGeometry(1.7, 12, 10), crownMat, sink.crownsSphere, { shadow: true, receive: true });
+    flushInstances(scene, new THREE.ConeGeometry(1.4, 3.6, 10), crownMat, sink.crownsCone, { shadow: true, receive: true });
+
+    flushInstances(scene, new THREE.CylinderGeometry(0.18, 0.22, 0.8, 8), new THREE.MeshStandardMaterial({ color: "#c9a23a", roughness: 0.5, metalness: 0.4 }), sink.bollards, { shadow: true });
+
+    const benchGeometry = mergeGeometries([
+        new THREE.BoxGeometry(1.6, 0.12, 0.5).translate(0, 0.28, 0),
+        new THREE.BoxGeometry(1.6, 0.5, 0.1).translate(0, 0.6, -0.24),
+        new THREE.BoxGeometry(0.1, 0.3, 0.45).translate(-0.7, 0.1, 0),
+        new THREE.BoxGeometry(0.1, 0.3, 0.45).translate(0.7, 0.1, 0),
+    ]);
+    flushInstances(scene, benchGeometry, new THREE.MeshStandardMaterial({ color: "#8a6a44", roughness: 0.8 }), sink.benches, { shadow: true });
+
+    const puddleMat = new THREE.MeshStandardMaterial({
+        color: "#0a0f16",
+        roughness: 0.04,
+        metalness: 0.3,
+        transparent: true,
+        opacity: 0,
+        depthWrite: false,
+    });
+    handles.puddleMaterial = puddleMat;
+    handles.puddles = flushInstances(scene, new THREE.CircleGeometry(1, 16).rotateX(-Math.PI / 2), puddleMat, sink.puddles, { receive: true });
+    if (handles.puddles) handles.puddles.renderOrder = 2;
+    return handles;
 }
 
 function createBuilding(width, depth, height, x, z, style = {}) {
     const group = new THREE.Group();
-    const baseHue = style.baseHue ?? 0.54 + Math.random() * 0.1;
+    const baseHue = style.baseHue ?? 0.54 + random() * 0.1;
     const saturation = style.saturation ?? 0.18;
-    const lightness = style.lightness ?? 0.38 + Math.random() * 0.16;
+    const lightness = style.lightness ?? 0.38 + random() * 0.16;
     const body = new THREE.Mesh(
         new THREE.BoxGeometry(width, height, depth),
         new THREE.MeshStandardMaterial({
@@ -553,28 +812,57 @@ function createBuilding(width, depth, height, x, z, style = {}) {
     body.receiveShadow = true;
     group.add(body);
 
-    const windowMat = style.windowMaterial ?? createMaterial(Math.random() < 0.35 ? "#ffd98a" : "#b8dcff", {
-        roughness: 0.16,
-        metalness: 0.5,
-        emissive: Math.random() < 0.35 ? "#d58932" : "#32506d",
-        emissiveIntensity: 0.18,
-    });
-    const windowGeo = new THREE.BoxGeometry(0.55, 0.85, 0.08);
     const floors = Math.max(1, Math.floor(height / 2.4));
     const columns = Math.max(1, Math.floor(width / 2.2));
+    const sideColumns = Math.max(1, Math.floor(depth / 2.2));
+    const kind = style.windowKind ?? "mixed";
+
+    const addWindow = (wx, wy, wz, ry) => {
+        const warm = kind === "warm" || (kind === "mixed" && random() < 0.35);
+        const on = random() > 0.28;
+        const base = warm ? [1, 0.72, 0.38] : [0.55, 0.85, 1];
+        const k = on ? 0.6 + random() * 0.4 : 0.12;
+        sink.windows.push({ x: x + wx, y: wy, z: z + wz, ry, color: [base[0] * k, base[1] * k, base[2] * k] });
+    };
 
     for (let floor = 0; floor < floors; floor += 1) {
+        const wy = 1.35 + floor * 2.25;
         for (let column = 0; column < columns; column += 1) {
             const wx = -width / 2 + 1 + column * 2.1;
-            const wy = 1.35 + floor * 2.25;
-            if (wx > width / 2 - 0.7 || Math.random() < 0.22) continue;
-            const front = new THREE.Mesh(windowGeo, windowMat);
-            front.position.set(wx, wy, depth / 2 + 0.045);
-            group.add(front);
-            const back = front.clone();
-            back.position.z = -depth / 2 - 0.045;
-            group.add(back);
+            if (wx > width / 2 - 0.7 || random() < 0.22) continue;
+            addWindow(wx, wy, depth / 2 + 0.045, 0);
+            addWindow(wx, wy, -depth / 2 - 0.045, 0);
         }
+        for (let column = 0; column < sideColumns; column += 1) {
+            const wz = -depth / 2 + 1 + column * 2.1;
+            if (wz > depth / 2 - 0.7 || random() < 0.22) continue;
+            addWindow(width / 2 + 0.045, wy, wz, Math.PI / 2);
+            addWindow(-width / 2 - 0.045, wy, wz, Math.PI / 2);
+        }
+    }
+
+    if (style.neon) {
+        const signCount = 1 + Math.floor(random() * 2);
+        for (let i = 0; i < signCount; i += 1) {
+            const color = NEON_COLORS[Math.floor(random() * NEON_COLORS.length)];
+            const onFront = random() < 0.5;
+            const wy = 4 + random() * Math.max(2, height - 9);
+            sink.neon.push({
+                x: x + (onFront ? (random() - 0.5) * (width - 2) : width / 2 + 0.12),
+                y: wy,
+                z: onFront ? z + depth / 2 + 0.12 : z + (random() - 0.5) * (depth - 2),
+                ry: onFront ? 0 : Math.PI / 2,
+                sx: 1.2 + random() * 1.2,
+                sy: 0.45 + random() * 0.35,
+                color,
+            });
+        }
+    }
+
+    if (style.antenna) {
+        const antennaHeight = 2.6 + random() * 2.2;
+        sink.antennas.push({ x, y: height + 0.34 + antennaHeight / 2, z, sy: antennaHeight });
+        (random() < 0.5 ? sink.beaconsA : sink.beaconsB).push({ x, y: height + 0.34 + antennaHeight + 0.1, z });
     }
 
     const roof = new THREE.Mesh(
@@ -588,25 +876,21 @@ function createBuilding(width, depth, height, x, z, style = {}) {
     return group;
 }
 
-function createTree(x, z) {
-    const group = new THREE.Group();
-    const trunk = new THREE.Mesh(new THREE.CylinderGeometry(0.2, 0.32, 2.2, 9), createMaterial("#77583a", { roughness: 0.8 }));
-    trunk.position.y = 1.1;
-    trunk.castShadow = true;
-    group.add(trunk);
-    const crown = new THREE.Mesh(new THREE.SphereGeometry(1.35 + Math.random() * 0.9, 12, 10), createMaterial("#2f7d44", { roughness: 0.76 }));
-    crown.position.y = 2.7;
-    crown.scale.y = 0.76;
-    crown.castShadow = true;
-    crown.receiveShadow = true;
-    group.add(crown);
-    group.position.set(x, 0, z);
-    return group;
+function addTree(x, z) {
+    const cone = random() < 0.4;
+    const scale = 0.85 + random() * 0.6;
+    const color = new THREE.Color().setHSL(0.3 + random() * 0.06, 0.45, 0.22 + random() * 0.1);
+    sink.trunks.push({ x, y: 1.1, z, sy: scale });
+    if (cone) {
+        sink.crownsCone.push({ x, y: 1.6 + 2.4 * scale, z, sx: scale, sy: scale, sz: scale, color });
+    } else {
+        sink.crownsSphere.push({ x, y: 2.7 * scale, z, sx: scale, sy: scale * 0.76, sz: scale, color });
+    }
 }
 
 function createStreetProp(x, z, variant, kioskAccentMaterial) {
     const group = new THREE.Group();
-    const roll = Math.random();
+    const roll = random();
 
     if (roll < 0.34) {
         const base = new THREE.Mesh(new THREE.BoxGeometry(1.6, 0.72, 1.05), createMaterial("#26313a", { roughness: 0.64, metalness: 0.18 }));
@@ -645,7 +929,7 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
             emissiveIntensity: 0.42,
         }));
         sign.position.y = 2.6;
-        sign.rotation.y = Math.random() * Math.PI;
+        sign.rotation.y = random() * Math.PI;
         group.add(sign);
         group.userData = {
             radius: 0.95,
@@ -683,21 +967,21 @@ function createStreetProp(x, z, variant, kioskAccentMaterial) {
     }
 
     group.position.set(x, 0, z);
-    group.rotation.y = Math.random() * Math.PI;
+    group.rotation.y = random() * Math.PI;
     return group;
 }
 
 function createContainerStack(x, z, materials, levels = 2) {
     const group = new THREE.Group();
     const palettes = [materials.containerBlue, materials.containerRed, materials.containerGreen];
-    const rows = 1 + Math.floor(Math.random() * 2);
-    const cols = 1 + Math.floor(Math.random() * 2);
+    const rows = 1 + Math.floor(random() * 2);
+    const cols = 1 + Math.floor(random() * 2);
     let maxX = 0;
     let maxZ = 0;
 
     for (let row = 0; row < rows; row += 1) {
         for (let col = 0; col < cols; col += 1) {
-            const levelCount = Math.max(1, levels - Math.floor(Math.random() * 2));
+            const levelCount = Math.max(1, levels - Math.floor(random() * 2));
             for (let level = 0; level < levelCount; level += 1) {
                 const mesh = new THREE.Mesh(
                     new THREE.BoxGeometry(2.3, 1.1, 1.18),
@@ -728,7 +1012,7 @@ function createCrateStackProp(x, z, levels = 2) {
         group.add(mesh);
     }
     group.position.set(x, 0, z);
-    group.rotation.y = Math.random() * Math.PI;
+    group.rotation.y = random() * Math.PI;
     group.userData = {
         radius: 1.05,
         type: "crate",
@@ -1000,7 +1284,7 @@ function getDistrictForPosition(x, z) {
 function shuffle(items) {
     const next = [...items];
     for (let index = next.length - 1; index > 0; index -= 1) {
-        const swapIndex = Math.floor(Math.random() * (index + 1));
+        const swapIndex = Math.floor(random() * (index + 1));
         const value = next[index];
         next[index] = next[swapIndex];
         next[swapIndex] = value;
@@ -1047,7 +1331,7 @@ function createScannerZones(scene, scannerZones) {
         core.position.set(zone.x, 0.05, zone.z);
         scene.add(core);
 
-        scannerZones.push({ ...zone, ring, core, pulse: Math.random() * Math.PI * 2 });
+        scannerZones.push({ ...zone, ring, core, pulse: random() * Math.PI * 2 });
     }
 }
 
@@ -1168,4 +1452,25 @@ function appendObstacleFromMesh(obstacles, mesh, x, z) {
         mesh,
         ...mesh.userData,
     });
+}
+
+function createShip(scene, objects) {
+    const group = new THREE.Group();
+    const hull = new THREE.Mesh(new THREE.BoxGeometry(4, 2.4, 24), createMaterial("#7a2b2b", { roughness: 0.6, metalness: 0.3 }));
+    hull.position.y = 0.6;
+    hull.castShadow = true;
+    group.add(hull);
+    const deck = new THREE.Mesh(new THREE.BoxGeometry(3.6, 0.2, 22), createMaterial("#3a3f45", { roughness: 0.8 }));
+    deck.position.y = 1.9;
+    group.add(deck);
+    const cabin = new THREE.Mesh(new THREE.BoxGeometry(3, 3, 4), createMaterial("#e6ebef", { roughness: 0.5 }));
+    cabin.position.set(0, 3.5, 8);
+    cabin.castShadow = true;
+    group.add(cabin);
+    const funnel = new THREE.Mesh(new THREE.CylinderGeometry(0.6, 0.7, 2.2, 10), createMaterial("#d9a43a", { roughness: 0.5 }));
+    funnel.position.set(0, 5.6, 8.6);
+    group.add(funnel);
+    group.position.set(-CONFIG.map.size / 2 - 4.5, 0, -14);
+    scene.add(group);
+    objects.push(group);
 }

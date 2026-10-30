@@ -122,3 +122,5 @@ renderer.domElement.addEventListener("webglcontextlost", (event) => {
 });
 
 animate();
+
+if (import.meta.env.DEV) window.__street = { state, post, runtime };

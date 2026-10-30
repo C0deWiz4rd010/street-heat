@@ -240,6 +240,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         // Phase 6.1: Provoke key (Q) — handled outside physics step so it triggers once per real frame
         if (input.consume("q")) tryProvoke();
         updateDebug(realDt);
+        updateWorldVisuals(realDt);
 
         if (!state.running || state.paused || state.screen !== "playing") {
             physicsAccumulator = 0;
@@ -2992,28 +2993,70 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         return `${obstacle.label ?? "Prop"} zerlegt. +${reward} Score.`;
     }
 
+    const visualColor = new THREE.Color();
+    const NIGHT_TINT = new THREE.Color("#071018");
+    const SUN_DAY = new THREE.Color("#fff7df");
+    const SUN_DUSK = new THREE.Color("#ff8a4a");
+    const GLOW_DAY = new THREE.Color("#63c8ff");
+    const GLOW_NIGHT = new THREE.Color("#69d0ff");
+    const lerp = (a, b, t) => a + (b - a) * t;
+    let lightningTimer = 0;
+    let secondFlash = 0;
+
     function applyWeatherVisuals() {
-        const weather = WEATHER_MODES[state.weather.mode] ?? WEATHER_MODES.clear;
-        const color = new THREE.Color(weather.color);
-        if (state.time.phase === "night") color.lerp(new THREE.Color("#071018"), 0.38);
-        scene.background = color;
-        post.setAtmosphere(color, state.time.phase, state.weather.mode);
+        const mode = state.weather.mode;
+        const weather = WEATHER_MODES[mode] ?? WEATHER_MODES.clear;
+        const day = state.time.daylight ?? 1;
+        const smoothDay = day * day * (3 - 2 * day);
+        const n = 1 - smoothDay;
+        visualColor.set(weather.color).lerp(NIGHT_TINT, 0.38 * n);
+        scene.background = visualColor;
         if (scene.fog) {
-            scene.fog.color.copy(color);
-            const fogNear = state.weather.mode === "fog" ? 20 : state.weather.mode === "storm" ? 28 : 48;
-            const fogFar = state.weather.mode === "fog" ? 72 : state.weather.mode === "storm" ? 102 : 130;
-            scene.fog.near = state.time.phase === "night" ? fogNear * 0.92 : fogNear;
-            scene.fog.far = state.time.phase === "night" ? fogFar * 0.9 : fogFar;
+            scene.fog.color.copy(visualColor);
+            const fogNear = mode === "fog" ? 20 : mode === "storm" ? 28 : 48;
+            const fogFar = mode === "fog" ? 72 : mode === "storm" ? 102 : 130;
+            scene.fog.near = fogNear * (1 - 0.08 * n);
+            scene.fog.far = fogFar * (1 - 0.1 * n);
         }
         if (lights) {
-            lights.ambient.intensity = state.time.phase === "night" ? 0.7 : state.weather.mode === "storm" ? 0.92 : 1.25;
-            lights.sun.intensity = state.time.phase === "night"
-                ? (state.weather.mode === "storm" ? 0.85 : 0.55)
-                : state.weather.mode === "storm" ? 2.6 : 4.8;
-            lights.nightGlow.intensity = state.time.phase === "night" ? 1.7 : state.weather.mode === "fog" ? 1.05 : 0.9;
-            lights.nightGlow.color.set(state.time.phase === "night" ? "#69d0ff" : "#63c8ff");
+            lights.ambient.intensity = lerp(mode === "storm" ? 0.92 : 1.25, 0.7, n);
+            lights.sun.intensity = lerp(mode === "storm" ? 2.6 : 4.8, mode === "storm" ? 0.85 : 0.55, n);
+            lights.sun.color.copy(SUN_DAY).lerp(SUN_DUSK, 4 * smoothDay * n * 0.9);
+            lights.nightGlow.intensity = lerp(mode === "fog" ? 1.05 : 0.9, 1.7, n);
+            lights.nightGlow.color.copy(GLOW_DAY).lerp(GLOW_NIGHT, n);
         }
-        renderer.toneMappingExposure = state.time.phase === "night" ? 0.92 : state.weather.mode === "storm" ? 0.98 : 1.08;
+        renderer.toneMappingExposure = lerp(mode === "storm" ? 0.98 : 1.08, 0.92, n);
+        post.setAtmosphere(visualColor, n, mode);
+        post.setDaylight(smoothDay);
+    }
+
+    /** Per-frame: ease day/night and wetness, run storm lightning, animate the world. */
+    function updateWorldVisuals(dt) {
+        const targetDay = state.time.phase === "night" ? 0 : 1;
+        const day = state.time.daylight ?? targetDay;
+        const step = dt / 9;
+        state.time.daylight = day < targetDay ? Math.min(targetDay, day + step) : Math.max(targetDay, day - step);
+
+        const mode = state.weather.mode;
+        const wetTarget = mode === "rain" || mode === "storm" ? 1 : mode === "fog" ? 0.35 : 0;
+        const wet = state.weather.wetness ?? wetTarget;
+        state.weather.wetness = wet < wetTarget ? Math.min(wetTarget, wet + dt * 0.12) : Math.max(wetTarget, wet - dt * 0.05);
+
+        if (mode === "storm") {
+            lightningTimer -= dt;
+            if (lightningTimer <= 0) {
+                post.flashLightning(1);
+                secondFlash = 0.16 + Math.random() * 0.12;
+                lightningTimer = 3 + Math.random() * 7;
+            }
+        }
+        if (secondFlash > 0) {
+            secondFlash -= dt;
+            if (secondFlash <= 0) post.flashLightning(0.7);
+        }
+
+        applyWeatherVisuals();
+        world.updateVisuals(dt, 1 - state.time.daylight, state.weather.wetness);
     }
 
     function updateDebug(dt) {

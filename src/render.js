@@ -16,6 +16,10 @@ export const QUALITY_LEVELS = {
 
 const SHADOW_HALF_EXTENT = 35;
 const SUN_OFFSET = new THREE.Vector3(45, 58, -32);
+const dayTop = new THREE.Color("#2c4a7a");
+const nightTop = new THREE.Color("#150a2e");
+const glowDay = new THREE.Color("#ffb070");
+const glowNight = new THREE.Color("#ff3fa4");
 
 const GRADE_SHADER = {
     name: "StreetHeatGrade",
@@ -187,23 +191,29 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         return quality;
     }
 
-    /** Called from weather visuals: base colour (fog) plus time phase. */
-    function setAtmosphere(color, phase, weatherMode) {
-        const night = phase === "night";
+    /** Called from weather visuals: base colour (fog), night factor 0..1 and weather mode. */
+    function setAtmosphere(color, night, weatherMode) {
         skyUniforms.uHorizon.value.copy(color);
-        tmpTop.copy(color).multiplyScalar(night ? 0.35 : 0.55);
-        if (!night) tmpTop.lerp(new THREE.Color("#2c4a7a"), weatherMode === "clear" ? 0.45 : 0.15);
-        else tmpTop.lerp(new THREE.Color("#150a2e"), 0.5);
+        tmpTop.copy(color).multiplyScalar(0.55 - 0.2 * night);
+        tmpTop.lerp(dayTop, (weatherMode === "clear" ? 0.45 : 0.15) * (1 - night));
+        tmpTop.lerp(nightTop, 0.5 * night);
         skyUniforms.uTop.value.copy(tmpTop);
-        skyUniforms.uGlowAmount.value = night ? 0.5 : 0.1;
-        skyUniforms.uGlow.value.set(night ? "#ff3fa4" : "#ffb070");
+        skyUniforms.uGlowAmount.value = 0.1 + 0.4 * night;
+        skyUniforms.uGlow.value.copy(glowDay).lerp(glowNight, night);
 
-        const g = GRADES[night ? "night" : weatherMode === "storm" || weatherMode === "fog" ? "dusk" : "day"];
-        target.lift.fromArray(g.lift);
-        target.gain.fromArray(g.gain);
-        target.saturation = g.saturation;
-        target.vignette = g.vignette;
-        bloomTarget = g.bloom;
+        const base = GRADES[weatherMode === "storm" || weatherMode === "fog" ? "dusk" : "day"];
+        const g = GRADES.night;
+        const mix = (a, b) => a + (b - a) * night;
+        target.lift.setRGB(mix(base.lift[0], g.lift[0]), mix(base.lift[1], g.lift[1]), mix(base.lift[2], g.lift[2]));
+        target.gain.setRGB(mix(base.gain[0], g.gain[0]), mix(base.gain[1], g.gain[1]), mix(base.gain[2], g.gain[2]));
+        target.saturation = mix(base.saturation, g.saturation);
+        target.vignette = mix(base.vignette, g.vignette);
+        bloomTarget = [mix(base.bloom[0], g.bloom[0]), mix(base.bloom[1], g.bloom[1]), mix(base.bloom[2], g.bloom[2])];
+    }
+
+    /** 1 = full day, 0 = night: the sun travels from a low western angle up to its noon spot. */
+    function setDaylight(day) {
+        SUN_OFFSET.set(-40 + 85 * day, 30 + 28 * day, -32);
     }
 
     function flashLightning(amount) {
@@ -272,6 +282,7 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         getQuality: () => quality,
         getQualityConfig: () => QUALITY_LEVELS[quality],
         setAtmosphere,
+        setDaylight,
         flashLightning,
     };
 }
