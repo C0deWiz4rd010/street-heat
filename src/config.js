@@ -58,6 +58,15 @@ export const CONFIG = {
 };
 
 // Police unit tuning. chaseSpeed + chaseSpeedPerHeat * heat (+ nightBonus at night) while chasing.
+// Combo names by chain length (highest matching tier is shown next to the timer bar).
+export const COMBO_TIERS = [
+    { chain: 4, name: "Nice" },
+    { chain: 8, name: "Hot" },
+    { chain: 14, name: "Blazing" },
+    { chain: 22, name: "Insane" },
+    { chain: 32, name: "Legendary" },
+];
+
 export const POLICE_UNITS = {
     patrol: { turnRate: 2.35, mass: 1.1, damageFactor: 0.9, wallSpeedFactor: 0.7, hitSpeedFactor: 0.42, chaseSpeed: 11.5, chaseSpeedPerHeat: 1.4, nightBonus: 0.8, idleSpeed: 8 },
     suv: { turnRate: 1.85, mass: 1.65, damageFactor: 1.1, wallSpeedFactor: 0.78, hitSpeedFactor: 0.42, chaseSpeed: 10.8, chaseSpeedPerHeat: 1.1, nightBonus: 0, idleSpeed: 8 },

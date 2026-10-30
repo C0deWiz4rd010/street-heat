@@ -1,4 +1,4 @@
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
+import { ACHIEVEMENTS, COMBO_TIERS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
 
 export function mountHud(root) {
     root.innerHTML = `
@@ -45,6 +45,8 @@ export function mountHud(root) {
                 <div class="chip combo-chip" id="comboChip">
                     <span class="label">Combo</span>
                     <strong id="comboValue">x1.0</strong>
+                    <small class="combo-name" id="comboName"></small>
+                    <i class="combo-bar"><b id="comboFill"></b></i>
                 </div>
                 <div class="chip drift-chip" id="driftChip">
                     <span class="label">Drift</span>
@@ -182,6 +184,8 @@ export function mountHud(root) {
         stars: document.getElementById("stars"),
         comboChip: document.getElementById("comboChip"),
         comboValue: document.getElementById("comboValue"),
+        comboName: document.getElementById("comboName"),
+        comboFill: document.getElementById("comboFill"),
         driftChip: document.getElementById("driftChip"),
         driftValue: document.getElementById("driftValue"),
         carName: document.getElementById("carName"),
@@ -256,6 +260,9 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.stars.closest(".chip")?.classList.toggle("heat-critical", state.wanted.level >= 4);
     ui.comboValue.textContent = `x${state.combo.multiplier.toFixed(1)}`;
     ui.comboChip.classList.toggle("live", state.combo.timer > 0);
+    const comboTier = [...COMBO_TIERS].reverse().find((tier) => state.combo.chain >= tier.chain);
+    ui.comboName.textContent = comboTier && state.combo.timer > 0 ? comboTier.name : "";
+    ui.comboFill.style.width = `${state.combo.timer > 0 ? Math.min(1, state.combo.timer / (state.combo.maxTimer || 4.2)) * 100 : 0}%`;
     ui.driftValue.textContent = Math.round(state.combo.driftScore);
     ui.driftChip.classList.toggle("live", state.player.drift > 0);
 
@@ -297,9 +304,30 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.garagePanel.classList.toggle("show", state.screen === "garage");
 }
 
+const BREAKDOWN_LABELS = {
+    drift: "Drift",
+    nearMiss: "Near-Miss & Close Calls",
+    pickups: "Pickups",
+    props: "Zerstörte Props",
+    missions: "Missionen",
+    events: "Events",
+    escape: "Flucht",
+    other: "Sonstiges",
+};
+
 export function showGameOver(ui, state) {
-    ui.finalScore.textContent = `Score: ${Math.round(state.score).toLocaleString("de-DE")}`;
-    ui.finalStats.textContent = `${state.stats.missions} Missionen | ${state.stats.pickups} Pickups | ${state.stats.propsDestroyed} Props | Drift ${Math.round(state.stats.driftScore)}`;
+    ui.finalScore.textContent = `Score: ${Math.round(state.score).toLocaleString("de-DE")}${state.stats.newRecord ? "  ★ NEUER REKORD" : ""}`;
+    const rows = Object.entries(state.stats.breakdown)
+        .filter(([, value]) => value > 0.5)
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, value]) => `<li><span>${BREAKDOWN_LABELS[key] ?? key}</span><b>${Math.round(value).toLocaleString("de-DE")}</b></li>`)
+        .join("");
+    const unlocked = state.stats.unlocked.length ? `<p class="run-unlocked">Achievements: ${state.stats.unlocked.join(", ")}</p>` : "";
+    ui.finalStats.innerHTML = `
+        <p>${state.stats.missions} Missionen | ${state.stats.pickups} Pickups | ${state.stats.propsDestroyed} Props | Beste Combo ${state.combo.best}</p>
+        <ul class="run-breakdown">${rows}</ul>
+        <p class="run-cash">Verdientes Cash: <b>$${Math.round(state.stats.cashEarned).toLocaleString("de-DE")}</b></p>
+        ${unlocked}`;
     ui.gameOver.classList.add("show");
 }
 

@@ -104,6 +104,10 @@ export function createInitialState() {
             propsDestroyed: 0,
             events: 0,
             driftScore: 0,
+            cashEarned: 0,
+            newRecord: false,
+            unlocked: [],
+            breakdown: { drift: 0, nearMiss: 0, pickups: 0, props: 0, missions: 0, events: 0, escape: 0, other: 0 },
         },
         helicopter: {
             active: false,

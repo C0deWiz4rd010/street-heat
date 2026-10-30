@@ -1079,3 +1079,48 @@ canvas.game-canvas {
 #speedLines {
     display: none;
 }
+
+.combo-name {
+    color: #c9a5ff;
+    display: block;
+    font-size: 11px;
+    font-weight: 800;
+    letter-spacing: 1px;
+    min-height: 13px;
+    text-transform: uppercase;
+}
+
+.combo-bar {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 2px;
+    display: block;
+    height: 3px;
+    margin-top: 3px;
+    overflow: hidden;
+}
+
+.combo-bar b {
+    background: linear-gradient(90deg, #c9a5ff, #63c8ff);
+    display: block;
+    height: 100%;
+    width: 0;
+}
+
+.run-breakdown {
+    list-style: none;
+    margin: 10px auto;
+    max-width: 320px;
+    padding: 0;
+    text-align: left;
+}
+
+.run-breakdown li {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+}
+
+.run-cash,
+.run-unlocked {
+    margin: 6px 0 0;
+}

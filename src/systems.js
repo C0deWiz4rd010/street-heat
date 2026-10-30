@@ -124,6 +124,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.stats.propsDestroyed = 0;
         state.stats.events = 0;
         state.stats.driftScore = 0;
+        state.stats.cashEarned = 0;
+        state.stats.newRecord = false;
+        state.stats.unlocked = [];
+        state.stats.breakdown = { drift: 0, nearMiss: 0, pickups: 0, props: 0, missions: 0, events: 0, escape: 0, other: 0 };
         state.contract.id = CONTRACTS[Math.floor(Math.random() * CONTRACTS.length)].id;
         state.contract.progress = 0;
         state.contract.completed = false;
@@ -201,7 +205,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 const elapsed = state.cleanEscape.elapsed;
                 if (state.wanted.level === 0 && state.cleanEscape.crashes === 0 && elapsed < 60) {
                     addCash(500);
-                    addScore(700, true);
+                    addScore(700, true, "escape");
                     spawnPopup("CLEAN ESCAPE +$500", "bounty");
                     setStatus("Saubere Flucht: Heat 4 -> 0 ohne Crash. +$500.", 2.6);
                     state.cleanEscape.active = false;
@@ -446,7 +450,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             player.driftSessionScore = (player.driftSessionScore ?? 0) + driftGain * 10;
             if (state.combo.driftBank >= 12) {
                 state.combo.driftBank = 0;
-                addScore(18 + gripLevel * 5);
+                addScore(18 + gripLevel * 5, false, "drift");
             }
         }
 
@@ -726,7 +730,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const pickup = pickups[index];
         const info = PICKUP_TYPES[pickup.type];
         const district = getDistrictAt(pickup.x, pickup.z);
-        const gained = addScore(info.score);
+        const gained = addScore(info.score, false, "pickups");
         addCash(info.cash || 0);
         if (info.heal) {
             const healAmount = Math.round(info.heal * (district.healMultiplier ?? 1));
@@ -1088,7 +1092,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     state.mission.progress += 1;
                     if (state.mission.progress >= state.mission.target) completeMission();
                 }
-                addScore(45 + state.wanted.level * 12);
+                addScore(45 + state.wanted.level * 12, false, "nearMiss");
             }
 
             if (agent.leaving) {
@@ -1657,7 +1661,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.worldEvent.x = event.x;
             state.worldEvent.z = event.z;
             if (distanceSq(state.player.x, state.player.z, event.x, event.z) < (event.collectRadius ?? 13) ** 2) {
-                addScore(event.score, true);
+                addScore(event.score, true, "events");
                 const cashGain = addCash(event.cash || 0);
                 if (event.heal) state.player.health = Math.min(getMaxHealth(), state.player.health + event.heal);
                 if (event.nitro) state.player.nitro = Math.min(getNitroMax(), state.player.nitro + event.nitro);
@@ -2259,7 +2263,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         nearMiss.timer = 8;
         nearMiss.streakTimer = 6;
         const earned = Math.round(80 + state.combo.chain * 5);
-        addScore(earned);
+        addScore(earned, false, "nearMiss");
         spawnParticle(state.player.x, state.player.z, "#ffc64d", 6);
         spawnPopup(`CLOSE! +${earned}`, "nearMiss");
         audio?.nearMiss?.();
@@ -2313,6 +2317,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.player.health = 0;
             state.running = false;
             state.screen = "gameover";
+            state.stats.newRecord = Math.round(state.score) > state.bestScore;
             state.bestScore = Math.max(state.bestScore, Math.round(state.score));
             persistProfile();
             flushProfile();
@@ -2338,11 +2343,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
     }
 
-    function addScore(amount, missionReward = false) {
+    function addScore(amount, missionReward = false, category = missionReward ? "missions" : "other") {
         if (amount <= 0) return 0;
         if (missionReward) state.combo.chain += 3;
         else state.combo.chain += 1;
         state.combo.timer = missionReward ? 6 : 4.2;
+        state.combo.maxTimer = state.combo.timer;
         state.combo.best = Math.max(state.combo.best, state.combo.chain);
         // Phase 6.1: provoke score boost
         const provokeBonus = (state.provoke?.active ?? 0) > 0 ? 0.5 : 0;
@@ -2353,6 +2359,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         );
         const gained = amount * state.combo.multiplier;
         state.score += gained;
+        state.stats.breakdown[category] = (state.stats.breakdown[category] ?? 0) + gained;
         refreshProgress();
         return gained;
     }
@@ -2364,6 +2371,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if ((state.provoke?.active ?? 0) > 0) multiplier *= 1.5;
         const gained = Math.round(amount * multiplier);
         state.cash += gained;
+        state.stats.cashEarned += gained;
         persistProfile();
         return gained;
     }
@@ -2440,6 +2448,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (state.achievements.includes(achievement.id)) continue;
             if (getLifetimeMetric(achievement.metric) >= achievement.target) {
                 state.achievements.push(achievement.id);
+                state.stats.unlocked.push(achievement.label);
                 addCash(achievement.reward);
                 setStatus(`Achievement: ${achievement.label}. +$${achievement.reward}`, 3);
                 audio?.upgrade();
@@ -2476,41 +2485,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     // Phase 6.4: off-road detection — Park grass slows car down
-    function getNextUpgrade() {
-        let best = null;
-        for (const id of Object.keys(UPGRADES)) {
-            const level = state.upgrades[id] ?? 0;
-            if (level >= UPGRADES[id].max) continue;
-            const cost = getUpgradeCost(id);
-            if (!best || level < best.level || (level === best.level && cost < best.cost)) {
-                best = { id, level, cost };
-            }
-        }
-        return best;
-    }
-
-    function buyNextUpgrade() {
-        const next = getNextUpgrade();
-        if (!next) {
-            setStatus("Garage: alle Upgrades sind voll ausgebaut.", 1.8);
-            audio?.denied();
-            return;
-        }
-        if (!spendCash(next.cost)) {
-            setStatus(`Garage: $${next.cost} benoetigt fuer ${UPGRADES[next.id].label}.`, 1.8);
-            audio?.denied();
-            return;
-        }
-
-        state.upgrades[next.id] += 1;
-        if (next.id === "armor") state.player.health = Math.min(getMaxHealth(), state.player.health + 26);
-        if (next.id === "nitro") state.player.nitro = Math.min(getNitroMax(), state.player.nitro + 32);
-        spawnParticle(state.player.x, state.player.z, "#c9a5ff", 18);
-        setStatus(`${UPGRADES[next.id].label} Level ${state.upgrades[next.id]} installiert: ${UPGRADES[next.id].effect}.`, 2.6);
-        audio?.upgrade();
-        persistProfile();
-    }
-
     function buyUpgrade(id) {
         if (!UPGRADES[id]) return;
         const level = state.upgrades[id] ?? 0;
@@ -2933,7 +2907,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const index = world.obstacles.indexOf(obstacle);
         if (index >= 0) world.obstacles.splice(index, 1);
         const reward = obstacle.reward ?? Math.round(20 + impact * 5);
-        addScore(reward);
+        addScore(reward, false, "props");
         state.stats.propsDestroyed += 1;
         state.lifetime.props += 1;
         refreshProgress();
