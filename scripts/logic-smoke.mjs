@@ -291,6 +291,19 @@ assert.notEqual(music.chordRoot(0, "downtown"), music.chordRoot(0, "harbor"), "e
 assert.equal(music.chordRoot(4, "park"), music.chordRoot(0, "park"), "the progression loops every four bars");
 assert.ok([music.BASS_STEPS, music.KICK_STEPS, music.SNARE_STEPS, music.HAT_STEPS].every((p) => p.length === music.STEPS_PER_BAR), "patterns span one bar");
 
+// --- Siren: pattern choice and loudness (the synthesis itself is verified by an offline render) ---
+const { SIREN_MODES, sirenLevelFor, sirenModeFor } = await import("../src/siren.js");
+assert.equal(sirenModeFor(0, 10), null, "no heat, no siren");
+assert.equal(sirenModeFor(2, 400), null, "too far to hear");
+assert.equal(sirenModeFor(1, 40), "wail");
+assert.equal(sirenModeFor(3, 40), "hilo");
+assert.equal(sirenModeFor(5, 12), "yelp", "yelp only when a cop is right behind you at max heat");
+assert.equal(sirenModeFor(5, 80), "hilo");
+assert.ok(sirenLevelFor(3, 10, "hilo") > sirenLevelFor(3, 90, "hilo"), "closer is louder");
+assert.ok(sirenLevelFor(5, 5, "yelp") <= 1 && sirenLevelFor(1, 5, "wail") < sirenLevelFor(5, 5, "wail"), "level is bounded and grows with heat");
+assert.equal(sirenLevelFor(3, 10, null), 0);
+assert.ok(Object.values(SIREN_MODES).every((m) => m.base - m.depth > 300 && m.base + m.depth < 1400), "all notes stay in a pleasant horn range");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

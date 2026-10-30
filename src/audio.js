@@ -1,4 +1,5 @@
 import { CAR_MODELS } from "./config.js";
+import { createSiren, sirenLevelFor, sirenModeFor } from "./siren.js";
 import { BASS_STEPS, CHORD_TONES, HAT_STEPS, KICK_STEPS, LEAD_ARP, SNARE_STEPS, STEPS_PER_BAR, chordRoot, layerGains, musicModeFor, semitoneHz, stepSeconds } from "./music.js";
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
@@ -28,6 +29,9 @@ export function createAudioDirector() {
     let squeal = null;
     let scrape = null;
     let siren = null;
+    let sirenMode = null;
+    let sirenCandidate = null;
+    let sirenCandidateSince = 0;
     let rotor = null;
     let lastSirenDist = Infinity;
     let lastGear = 1;
@@ -178,19 +182,7 @@ export function createAudioDirector() {
     }
 
     function buildSiren() {
-        const osc = context.createOscillator();
-        osc.type = "square";
-        const tone = context.createBiquadFilter();
-        tone.type = "lowpass";
-        tone.frequency.value = 2400;
-        const gain = context.createGain();
-        gain.gain.value = 0;
-        const pan = panner(0);
-        osc.connect(tone).connect(gain);
-        if (pan) gain.connect(pan).connect(sfxBus);
-        else gain.connect(sfxBus);
-        osc.start();
-        siren = { osc, gain, pan };
+        siren = createSiren(context, sfxBus);
     }
 
     function buildRotor() {
@@ -337,20 +329,27 @@ export function createAudioDirector() {
 
         scrape.gain.gain.setTargetAtTime(active ? Math.min(0.16, (state.wallSlide ?? 0) * 0.2) : 0, now, 0.04);
 
-        // Siren: wail while they are still far, yelp when a cop is on your bumper. Pitch follows closing speed.
+        // Siren: see siren.js. The pattern only changes after it has been the better fit for 1.5 s,
+        // so it never flutters between modes.
         const nearest = state.nearestPoliceDistance ?? Infinity;
         const closing = Number.isFinite(lastSirenDist) && Number.isFinite(nearest) ? (lastSirenDist - nearest) / Math.max(dt, 0.001) : 0;
         lastSirenDist = nearest;
         const heat = state.wanted.level;
-        const distFactor = nearest < 85 ? Math.min(1, Math.pow(1 - nearest / 85, 0.6)) : 0;
-        const sirenBase = heat > 0 && active ? 0.02 + heat * 0.018 : 0;
-        const t = performance.now() / 1000;
-        const yelp = heat >= 3 && nearest < 30;
-        const sweep = yelp ? ((t * 3.4) % 1) * 520 : Math.sin(t * Math.PI * 2 * 0.32) * 330;
-        siren.osc.frequency.setTargetAtTime(yelp ? 760 + sweep : 880 + sweep + clamp(closing * 4, -170, 170), now, 0.025);
-        siren.gain.gain.setTargetAtTime(Math.min(0.2, sirenBase * (0.2 + distFactor * 0.8)), now, 0.12);
-        if (siren.pan && state.nearestPoliceOffset) {
-            siren.pan.pan.setTargetAtTime(panFor({ x: player.x + state.nearestPoliceOffset.x, z: player.z + state.nearestPoliceOffset.z }), now, 0.1);
+        const wanted = active ? sirenModeFor(heat, nearest) : null;
+        const clock = performance.now() / 1000;
+        if (wanted !== sirenCandidate) {
+            sirenCandidate = wanted;
+            sirenCandidateSince = clock;
+        }
+        if (wanted && wanted !== sirenMode && (clock - sirenCandidateSince > 1.5 || !sirenMode)) {
+            sirenMode = wanted;
+            siren.setMode(wanted);
+        }
+        siren.setLevel(sirenLevelFor(heat, nearest, wanted ?? null));
+        siren.setDistance(Number.isFinite(nearest) ? nearest : 100);
+        siren.setDoppler(closing * 6);
+        if (state.nearestPoliceOffset) {
+            siren.setPan(panFor({ x: player.x + state.nearestPoliceOffset.x, z: player.z + state.nearestPoliceOffset.z }));
         }
 
         // Helicopter rotor.
