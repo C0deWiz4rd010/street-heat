@@ -70,10 +70,10 @@ Hinweis zur Reihenfolge: Die Fabriken werden mitten in `createGameRuntime` aufge
 
 ## Spielstand und Einstellungen
 
-- Profil: `neon-pursuit-profile-v2` (Key bleibt), Format-`version` 3. `migrateProfile` hebt ältere Stände an, `loadProfile` begrenzt Werte und wirft unbekannte Autos weg.
+- Profil: `neon-pursuit-profile-v2` (Key bleibt), Format-`version` 4 (`look` statt `paint`). `migrateProfile` hebt ältere Stände an, `loadProfile` begrenzt Werte und wirft unbekannte Autos weg.
 - Einstellungen: `street-heat-settings`. Die Grafikstufe schreibt die Render-Pipeline zusätzlich unter `street-heat-quality`.
 - Speichern ist gedrosselt (höchstens alle 2 s) und passiert zusätzlich bei Game Over, Tab-Wechsel (`visibilitychange`) und `pagehide`.
 
 ## Tests
 
-`scripts/logic-smoke.mjs` ist ein einziges Skript ohne Framework, das mit `assert` prüft: Config-Konsistenz, Speicherformat und Migration, Fahrparcours pro Auto, Polizei-Navigation, Missionsdaten, Ruf und Tags, Settings, Onboarding, Musik- und Sirenenlogik, Bindings, Gamepad, Combo und Heat-Abklingen, Economy. Grafik, Ton und Spielgefühl sind nur im Browser prüfbar.
+`scripts/logic-smoke.mjs` ist ein einziges Skript ohne Framework, das mit `assert` prüft: Config-Konsistenz, Speicherformat und Migration, Fahrparcours pro Auto, Fahrzeugdaten (Archetypen, Flotten, Hitboxen, Kosmetik, Motorstimmen, Perks), Polizei-Navigation, Missionsdaten, Ruf und Tags, Settings, Onboarding, Musik- und Sirenenlogik, Bindings, Gamepad, Combo und Heat-Abklingen, Economy. Grafik, Ton und Spielgefühl sind nur im Browser prüfbar.
