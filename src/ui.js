@@ -100,10 +100,11 @@ export function mountHud(root) {
         <button id="muteBtn" class="mute-btn" aria-label="Ton an/aus" title="Ton an/aus">&#128266;</button>
 
         <div id="speedLines"></div>
-        <div id="popup"></div>
+        <div id="popup" role="status" aria-live="polite"></div>
         <div id="actionPrompt"></div>
-        <div id="status">Direkt im Spiel. Fahre los.</div>
-        <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>Q Provoke (Heat +1, Multiplikator +0.5)<br>G Garage | F3 Debug | R Neustart</div>
+        <div id="status" role="status" aria-live="polite">Direkt im Spiel. Fahre los.</div>
+        <div id="tip" role="status" aria-live="polite"></div>
+        <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>Q Provoke (Heat +1, Multiplikator +0.5)<br>G Garage | C Kamera | Esc Pause | F3 Debug | F4 Grafik | R Neustart</div>
 
         <div id="touchControls" aria-label="Touch-Steuerung">
             <div class="touch-pad">
@@ -120,15 +121,22 @@ export function mountHud(root) {
             </div>
         </div>
 
-        <div id="pauseOverlay">
-            <div>PAUSE</div>
-            <span>P druecken zum Weiterfahren</span>
+        <div id="pauseOverlay" role="dialog" aria-modal="true" aria-labelledby="pauseTitle">
+            <div class="pause-card">
+                <h2 id="pauseTitle">PAUSE</h2>
+                <div class="menu-actions">
+                    <button id="pauseResumeBtn">Weiter</button>
+                    <button id="pauseSettingsBtn">Einstellungen</button>
+                    <button id="pauseRestartBtn">Neustart</button>
+                    <button id="pauseMenuBtn">Zum Menü</button>
+                </div>
+                <span>P oder Esc: Weiterfahren</span>
+            </div>
         </div>
 
         <div id="mainMenu" class="menu-shell show">
             <section class="menu-panel">
-                <div class="label">Street Heat</div>
-                <h1>Street Heat</h1>
+                <h1 class="logo" aria-label="Street Heat"><span>STREET</span><span>HEAT</span></h1>
                 <div class="menu-stats">
                     <span>Best <strong id="menuBest">0</strong></span>
                     <span>Bank <strong id="menuCash">$0</strong></span>
@@ -138,7 +146,9 @@ export function mountHud(root) {
                 <div class="menu-actions">
                     <button id="startBtn">Run starten</button>
                     <button id="garageBtn">Garage</button>
-                    <button id="wipeProfileBtn">Profil loeschen</button>
+                    <button id="menuSettingsBtn">Einstellungen</button>
+                    <button id="menuControlsBtn">Steuerung</button>
+                    <button id="wipeProfileBtn">Profil löschen</button>
                 </div>
             </section>
         </div>
@@ -159,11 +169,78 @@ export function mountHud(root) {
 
         <div id="debugPanel"></div>
 
-        <div id="gameOver">
-            <h2>GAME OVER</h2>
+        <div id="gameOver" role="dialog" aria-labelledby="gameOverTitle">
+            <h2 id="gameOverTitle">GAME OVER</h2>
             <div id="finalScore">Score: 0</div>
             <div id="finalStats"></div>
-            <button id="restartBtn">Neustart</button>
+            <div class="menu-actions row">
+                <button id="restartBtn">Nochmal</button>
+                <button id="gameOverGarageBtn">Garage</button>
+                <button id="gameOverMenuBtn">Menü</button>
+            </div>
+        </div>
+
+        <div id="settingsPanel" class="modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" hidden>
+            <div class="modal-card">
+                <h2 id="settingsTitle">Einstellungen</h2>
+                <label>Gesamtlautstärke <input type="range" id="setMaster" min="0" max="1" step="0.05"></label>
+                <label>Musik <input type="range" id="setMusic" min="0" max="1" step="0.05"></label>
+                <label>Effekte <input type="range" id="setSfx" min="0" max="1" step="0.05"></label>
+                <label>Grafikqualität
+                    <select id="setQuality">
+                        <option value="low">Niedrig</option>
+                        <option value="medium">Mittel</option>
+                        <option value="high">Hoch</option>
+                    </select>
+                </label>
+                <label>Kamera
+                    <select id="setCamera">
+                        <option value="near">Nah</option>
+                        <option value="normal">Normal</option>
+                        <option value="far">Weit</option>
+                    </select>
+                </label>
+                <label>Screen-Shake <input type="range" id="setShake" min="0" max="1.5" step="0.1"></label>
+                <label class="check"><input type="checkbox" id="setReduced"> Reduzierte Bewegung</label>
+                <label class="check"><input type="checkbox" id="setMuted"> Ton aus</label>
+                <p class="hint">Tastenbelegung: folgt mit der Controller-Unterstützung.</p>
+                <div class="modal-actions">
+                    <button id="setOnboarding">Tutorial zurücksetzen</button>
+                    <button id="settingsCloseBtn">Schließen</button>
+                </div>
+            </div>
+        </div>
+
+        <div id="controlsPanel" class="modal" role="dialog" aria-modal="true" aria-labelledby="controlsTitle" hidden>
+            <div class="modal-card">
+                <h2 id="controlsTitle">Steuerung</h2>
+                <dl class="controls-list">
+                    <dt>W / ↑</dt><dd>Gas</dd>
+                    <dt>S / ↓</dt><dd>Bremsen, Rückwärts</dd>
+                    <dt>A D / ← →</dt><dd>Lenken</dd>
+                    <dt>Leertaste</dt><dd>Handbremse und Drift</dd>
+                    <dt>Shift</dt><dd>Nitro</dd>
+                    <dt>Q</dt><dd>Provoke (Heat +1, mehr Punkte und Cash)</dd>
+                    <dt>E</dt><dd>Interagieren (Garage, Abgabe)</dd>
+                    <dt>G</dt><dd>Garage</dd>
+                    <dt>C</dt><dd>Kamera wechseln</dd>
+                    <dt>P / Esc</dt><dd>Pause</dd>
+                    <dt>R</dt><dd>Run neu starten</dd>
+                    <dt>F3 / F4</dt><dd>Debug / Grafikstufe</dd>
+                </dl>
+                <div class="modal-actions"><button id="controlsCloseBtn">Schließen</button></div>
+            </div>
+        </div>
+
+        <div id="confirmPanel" class="modal" role="alertdialog" aria-modal="true" aria-labelledby="confirmTitle" hidden>
+            <div class="modal-card">
+                <h2 id="confirmTitle">Profil löschen?</h2>
+                <p>Cash, Autos, Upgrades, Ruf und Tags gehen unwiderruflich verloren.</p>
+                <div class="modal-actions">
+                    <button id="confirmNoBtn">Abbrechen</button>
+                    <button id="confirmYesBtn" class="danger">Ja, löschen</button>
+                </div>
+            </div>
         </div>
     `;
 
@@ -218,6 +295,18 @@ export function mountHud(root) {
         startBtn: document.getElementById("startBtn"),
         garageBtn: document.getElementById("garageBtn"),
         wipeProfileBtn: document.getElementById("wipeProfileBtn"),
+        menuSettingsBtn: document.getElementById("menuSettingsBtn"),
+        menuControlsBtn: document.getElementById("menuControlsBtn"),
+        pauseResumeBtn: document.getElementById("pauseResumeBtn"),
+        pauseSettingsBtn: document.getElementById("pauseSettingsBtn"),
+        pauseRestartBtn: document.getElementById("pauseRestartBtn"),
+        pauseMenuBtn: document.getElementById("pauseMenuBtn"),
+        gameOverGarageBtn: document.getElementById("gameOverGarageBtn"),
+        gameOverMenuBtn: document.getElementById("gameOverMenuBtn"),
+        tip: document.getElementById("tip"),
+        settingsPanel: document.getElementById("settingsPanel"),
+        controlsPanel: document.getElementById("controlsPanel"),
+        confirmPanel: document.getElementById("confirmPanel"),
         garagePanel: document.getElementById("garagePanel"),
         closeGarageBtn: document.getElementById("closeGarageBtn"),
         garageCash: document.getElementById("garageCash"),
@@ -231,6 +320,65 @@ export function mountHud(root) {
         restartBtn: document.getElementById("restartBtn"),
     };
 }
+
+function setText(element, value) {
+    if (element._text === value) return;
+    element._text = value;
+    element.textContent = value;
+}
+
+// Modal handling: focus moves into the dialog, Tab stays inside, Esc/close restores focus.
+const modalStack = [];
+
+export function isModalOpen() {
+    return modalStack.length > 0;
+}
+
+export function openModal(panel) {
+    if (!panel.hidden) return;
+    panel.hidden = false;
+    modalStack.push({ panel, returnTo: document.activeElement });
+    panel.querySelector("input, select, button")?.focus();
+}
+
+export function closeModal(panel) {
+    const index = modalStack.findIndex((entry) => entry.panel === panel);
+    if (index < 0) return;
+    const [entry] = modalStack.splice(index, 1);
+    panel.hidden = true;
+    entry.returnTo?.focus?.();
+}
+
+export function closeTopModal() {
+    const top = modalStack.at(-1);
+    if (top) closeModal(top.panel);
+    return Boolean(top);
+}
+
+window.addEventListener("keydown", (event) => {
+    if (!modalStack.length) return;
+    if (event.key === "Escape") {
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        closeTopModal();
+        return;
+    }
+    if (event.key === "Tab") {
+        const focusable = [...modalStack.at(-1).panel.querySelectorAll("input, select, button")].filter((el) => !el.disabled);
+        if (!focusable.length) return;
+        const first = focusable[0];
+        const last = focusable.at(-1);
+        if (event.shiftKey && document.activeElement === first) {
+            event.preventDefault();
+            last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+            event.preventDefault();
+            first.focus();
+        }
+    }
+    // Keep game keys (Space, arrows, letters) from steering the car behind an open dialog.
+    if (event.key !== "Tab") event.stopImmediatePropagation();
+}, true);
 
 export function renderHud(ui, state, world, traffic, police, roadblocks = [], eventPickups = [], hazards = [], helicopter = null) {
     const player = state.player;
@@ -257,13 +405,18 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     ui.wantedText.textContent = state.wanted.tier ?? state.wanted.status;
     ui.heatFill.style.width = `${state.wanted.level / 5 * 100}%`;
 
-    let stars = "";
-    for (let index = 1; index <= 5; index += 1) {
-        const active = index <= state.wanted.level;
-        stars += `<span class="${active ? "active" : ""}">${active ? "\u2605" : "\u2606"}</span>`;
+    // Heat stars only re-render when the level changes.
+    if (ui._heatLevel !== state.wanted.level) {
+        ui._heatLevel = state.wanted.level;
+        let stars = "";
+        for (let index = 1; index <= 5; index += 1) {
+            const active = index <= state.wanted.level;
+            stars += `<span class="${active ? "active" : ""}">${active ? "\u2605" : "\u2606"}</span>`;
+        }
+        ui.stars.innerHTML = stars;
+        ui.stars.setAttribute("aria-label", `Heat ${state.wanted.level} von 5`);
+        ui.stars.closest(".chip")?.classList.toggle("heat-critical", state.wanted.level >= 4);
     }
-    ui.stars.innerHTML = stars;
-    ui.stars.closest(".chip")?.classList.toggle("heat-critical", state.wanted.level >= 4);
     ui.comboValue.textContent = `x${state.combo.multiplier.toFixed(1)}`;
     ui.comboChip.classList.toggle("live", state.combo.timer > 0);
     const comboTier = [...COMBO_TIERS].reverse().find((tier) => state.combo.chain >= tier.chain);
@@ -283,7 +436,9 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     renderMinimap(ui, state, world, traffic, police, roadblocks, eventPickups, hazards, helicopter);
     renderDebug(ui, state, { traffic, police, roadblocks, eventPickups, hazards });
 
-    ui.status.textContent = state.statusMessage;
+    setText(ui.status, state.statusMessage);
+    setText(ui.tip, state.tip ?? "");
+    ui.tip.classList.toggle("show", Boolean(state.tip) && state.screen === "playing" && !state.paused);
     ui.status.style.opacity = state.statusTimer > 0 ? "1" : "0.78";
     ui.actionPrompt.textContent = state.actionPrompt;
     ui.actionPrompt.classList.toggle("show", Boolean(state.actionPrompt));
@@ -291,12 +446,12 @@ export function renderHud(ui, state, world, traffic, police, roadblocks = [], ev
     // Popup flash (near-miss, drift, etc.)
     const popup = state.popup;
     if (popup && popup.timer > 0) {
-        ui.popup.textContent = popup.text;
+        setText(ui.popup, popup.text);
         ui.popup.className = `popup-show popup-${popup.type}`;
         ui.popup.style.opacity = String(Math.min(1, popup.timer * 2));
     } else {
         ui.popup.className = "";
-        ui.popup.textContent = "";
+        setText(ui.popup, "");
     }
 
     // Speed lines overlay
@@ -494,8 +649,12 @@ function renderUpgradeHud(ui, state) {
 }
 
 function renderEventHud(ui, state) {
-    ui.eventLabel.textContent = state.worldEvent.active ? state.worldEvent.label : "Naechstes Event";
-    ui.eventTimer.textContent = state.worldEvent.active ? `${Math.ceil(state.worldEvent.timer)}s` : `${Math.ceil(state.worldEvent.timer)}s`;
+    // The event strip only shows while an event is actually running.
+    const strip = ui.eventLabel.parentElement;
+    strip.hidden = !state.worldEvent.active;
+    if (!state.worldEvent.active) return;
+    ui.eventLabel.textContent = state.worldEvent.label;
+    ui.eventTimer.textContent = `${Math.ceil(state.worldEvent.timer)}s`;
 }
 
 function renderContractHud(ui, state) {

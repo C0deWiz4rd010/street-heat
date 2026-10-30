@@ -5,7 +5,9 @@ import { createInput } from "./input.js";
 import { createRenderPipeline } from "./render.js";
 import { createInitialState } from "./state.js";
 import { createGameRuntime } from "./systems.js";
-import { mountHud } from "./ui.js";
+import { closeModal, hideGameOver, isModalOpen, mountHud, openModal } from "./ui.js";
+import { createOnboarding } from "./onboarding.js";
+import { createSettings } from "./settings.js";
 import { createMaterial } from "./vehicles.js";
 import { createWorld } from "./world.js";
 import "./styles.css";
@@ -67,6 +69,39 @@ const world = createWorld(scene, sharedMaterials);
 const lights = { ambient, sun, nightGlow };
 const post = createRenderPipeline({ renderer, scene, camera, sun });
 const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights, post });
+const settings = createSettings({
+    prefersReducedMotion: window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false,
+    onChange: (key) => applySetting(key),
+});
+state.settings = settings.values;
+state.cameraMode = settings.values.cameraMode;
+state.saveSettings = () => settings.save();
+const onboarding = createOnboarding({
+    isDone: () => settings.values.onboardingDone,
+    onComplete: () => settings.set("onboardingDone", true),
+});
+
+function applySetting(key) {
+    const v = settings.values;
+    if (["master", "music", "sfx"].includes(key)) audio.setVolumes({ master: v.master, music: v.music, sfx: v.sfx });
+    if (key === "muted") {
+        audio.setMuted(v.muted);
+        syncMuteButton();
+    }
+    if (key === "quality") post.setQuality(v.quality);
+    if (key === "reducedMotion") post.setReducedMotion(v.reducedMotion);
+    if (key === "cameraMode") state.cameraMode = v.cameraMode;
+}
+
+function syncMuteButton() {
+    ui.muteBtn.textContent = settings.values.muted ? "🔇" : "🔊";
+    ui.muteBtn.classList.toggle("muted", settings.values.muted);
+    ui.muteBtn.setAttribute("aria-pressed", String(settings.values.muted));
+}
+
+for (const key of ["master", "music", "sfx", "muted", "quality", "reducedMotion"]) applySetting(key);
+syncMuteButton();
+
 const input = createInput({
     onRestart: () => {
         if (state.screen === "playing" || state.screen === "gameover") runtime.reset();
@@ -78,9 +113,77 @@ const input = createInput({
 ui.restartBtn.addEventListener("click", () => runtime.reset());
 ui.muteBtn.addEventListener("click", () => {
     audio.unlock();
-    const nowMuted = audio.toggleMute();
-    ui.muteBtn.textContent = nowMuted ? "🔇" : "🔊";
-    ui.muteBtn.classList.toggle("muted", nowMuted);
+    settings.set("muted", !settings.values.muted);
+});
+
+// Pause menu
+ui.pauseResumeBtn.addEventListener("click", () => {
+    state.paused = false;
+});
+ui.pauseSettingsBtn.addEventListener("click", () => openSettings());
+ui.pauseRestartBtn.addEventListener("click", () => runtime.reset());
+ui.pauseMenuBtn.addEventListener("click", () => runtime.openMenu());
+
+// Game over
+ui.gameOverGarageBtn.addEventListener("click", () => {
+    hideGameOver(ui);
+    runtime.openGarage();
+});
+ui.gameOverMenuBtn.addEventListener("click", () => {
+    hideGameOver(ui);
+    runtime.openMenu();
+});
+
+// Settings, controls, wipe confirmation
+const controlsById = (id) => document.getElementById(id);
+const settingControls = {
+    master: controlsById("setMaster"),
+    music: controlsById("setMusic"),
+    sfx: controlsById("setSfx"),
+    quality: controlsById("setQuality"),
+    cameraMode: controlsById("setCamera"),
+    shake: controlsById("setShake"),
+    reducedMotion: controlsById("setReduced"),
+    muted: controlsById("setMuted"),
+};
+
+function syncSettingsPanel() {
+    for (const [key, control] of Object.entries(settingControls)) {
+        if (control.type === "checkbox") control.checked = Boolean(settings.values[key]);
+        else control.value = settings.values[key];
+    }
+}
+
+function openSettings() {
+    audio.unlock();
+    syncSettingsPanel();
+    openModal(ui.settingsPanel);
+}
+
+for (const [key, control] of Object.entries(settingControls)) {
+    control.addEventListener("input", () => {
+        settings.set(key, control.type === "checkbox" ? control.checked : control.type === "range" ? Number(control.value) : control.value);
+    });
+}
+controlsById("settingsCloseBtn").addEventListener("click", () => closeModal(ui.settingsPanel));
+controlsById("setOnboarding").addEventListener("click", () => {
+    settings.set("onboardingDone", false);
+    onboarding.restart();
+    state.statusMessage = "Tutorial zurückgesetzt. Es startet im nächsten Run.";
+    state.statusTimer = 2.5;
+});
+ui.menuSettingsBtn.addEventListener("click", () => openSettings());
+ui.menuControlsBtn.addEventListener("click", () => openModal(ui.controlsPanel));
+controlsById("controlsCloseBtn").addEventListener("click", () => closeModal(ui.controlsPanel));
+controlsById("confirmNoBtn").addEventListener("click", () => closeModal(ui.confirmPanel));
+controlsById("confirmYesBtn").addEventListener("click", () => {
+    closeModal(ui.confirmPanel);
+    runtime.resetProfile();
+});
+
+// Buttons keep focus after a click; drop it while driving so Space (drift) cannot re-trigger them.
+document.addEventListener("click", (event) => {
+    if (state.screen === "playing" && !state.paused) event.target.closest?.("button")?.blur();
 });
 ui.startBtn.addEventListener("click", () => {
     audio.unlock();
@@ -88,7 +191,7 @@ ui.startBtn.addEventListener("click", () => {
 });
 ui.garageBtn.addEventListener("click", () => runtime.openGarage());
 ui.closeGarageBtn.addEventListener("click", () => runtime.closeGarage());
-ui.wipeProfileBtn.addEventListener("click", () => runtime.resetProfile());
+ui.wipeProfileBtn.addEventListener("click", () => openModal(ui.confirmPanel));
 ui.carList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-car-index]");
     if (!button) return;
@@ -105,7 +208,9 @@ const clock = new THREE.Clock();
 
 function animate() {
     requestAnimationFrame(animate);
-    runtime.update(Math.min(clock.getDelta(), 0.05), input);
+    const dt = Math.min(clock.getDelta(), 0.05);
+    state.tip = onboarding.update(state, dt);
+    runtime.update(dt, input);
 }
 
 window.addEventListener("resize", () => {

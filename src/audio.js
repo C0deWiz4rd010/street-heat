@@ -16,6 +16,13 @@ export function createAudioDirector() {
     let lastSirenDist = 0;
     let unlocked = false;
     let muted = false;
+    let sfxBus = null;
+    let musicBus = null;
+    const volumes = { master: 0.8, music: 0.7, sfx: 0.9 };
+
+    function masterLevel() {
+        return 0.12 * volumes.master * (muted ? 0 : 1);
+    }
 
     function unlock() {
         if (unlocked) return;
@@ -24,14 +31,20 @@ export function createAudioDirector() {
 
         context = new AudioContextClass();
         master = context.createGain();
-        master.gain.value = 0.12;
+        master.gain.value = masterLevel();
         master.connect(context.destination);
+        sfxBus = context.createGain();
+        sfxBus.gain.value = volumes.sfx;
+        sfxBus.connect(sfxBus);
+        musicBus = context.createGain();
+        musicBus.gain.value = volumes.music;
+        musicBus.connect(sfxBus);
 
         engineOsc = context.createOscillator();
         engineOsc.type = "sawtooth";
         engineGain = context.createGain();
         engineGain.gain.value = 0;
-        engineOsc.connect(engineGain).connect(master);
+        engineOsc.connect(engineGain).connect(sfxBus);
         engineOsc.start();
 
         // Phase 7.1: low-frequency engine sub-layer (active during nitro)
@@ -39,7 +52,7 @@ export function createAudioDirector() {
         engineSubOsc.type = "sine";
         engineSubGain = context.createGain();
         engineSubGain.gain.value = 0;
-        engineSubOsc.connect(engineSubGain).connect(master);
+        engineSubOsc.connect(engineSubGain).connect(sfxBus);
         engineSubOsc.start();
 
         // Drift squeal oscillator
@@ -47,14 +60,14 @@ export function createAudioDirector() {
         driftOsc.type = "sine";
         driftGain = context.createGain();
         driftGain.gain.value = 0;
-        driftOsc.connect(driftGain).connect(master);
+        driftOsc.connect(driftGain).connect(sfxBus);
         driftOsc.start();
 
         sirenOsc = context.createOscillator();
         sirenOsc.type = "square";
         sirenGain = context.createGain();
         sirenGain.gain.value = 0;
-        sirenOsc.connect(sirenGain).connect(master);
+        sirenOsc.connect(sirenGain).connect(sfxBus);
         sirenOsc.start();
 
         // Phase 7.1: wall-slide noise via filtered white noise
@@ -71,16 +84,32 @@ export function createAudioDirector() {
         wallSlideFilter.Q.value = 1.2;
         wallSlideGain = context.createGain();
         wallSlideGain.gain.value = 0;
-        wallSlideNode.connect(wallSlideFilter).connect(wallSlideGain).connect(master);
+        wallSlideNode.connect(wallSlideFilter).connect(wallSlideGain).connect(sfxBus);
         wallSlideNode.start();
 
         unlocked = true;
     }
 
-    function toggleMute() {
-        muted = !muted;
-        if (master) master.gain.setTargetAtTime(muted ? 0 : 0.12, context.currentTime, 0.08);
+    function applyVolumes() {
+        if (!context) return;
+        master.gain.setTargetAtTime(masterLevel(), context.currentTime, 0.05);
+        sfxBus.gain.setTargetAtTime(volumes.sfx, context.currentTime, 0.05);
+        musicBus.gain.setTargetAtTime(volumes.music, context.currentTime, 0.05);
+    }
+
+    function setVolumes(next) {
+        Object.assign(volumes, next);
+        applyVolumes();
+    }
+
+    function setMuted(value) {
+        muted = Boolean(value);
+        applyVolumes();
         return muted;
+    }
+
+    function toggleMute() {
+        return setMuted(!muted);
     }
 
     function update(state, dt) {
@@ -139,7 +168,7 @@ export function createAudioDirector() {
         osc.type = type;
         osc.frequency.value = frequency;
         envelope.gain.value = 0;
-        osc.connect(envelope).connect(master);
+        osc.connect(envelope).connect(sfxBus);
         envelope.gain.linearRampToValueAtTime(gain, now + 0.012);
         envelope.gain.exponentialRampToValueAtTime(0.001, now + duration);
         osc.start(now);
@@ -158,7 +187,7 @@ export function createAudioDirector() {
         envelope.gain.setValueAtTime(0, now);
         envelope.gain.linearRampToValueAtTime(0.22, now + 0.018);
         envelope.gain.exponentialRampToValueAtTime(0.001, now + 0.26);
-        osc.connect(envelope).connect(master);
+        osc.connect(envelope).connect(sfxBus);
         osc.start(now);
         osc.stop(now + 0.3);
     }
@@ -167,6 +196,9 @@ export function createAudioDirector() {
         unlock,
         update,
         toggleMute,
+        setMuted,
+        setVolumes,
+        get musicBus() { return musicBus; },
         get isMuted() { return muted; },
         nearMiss,
         collect: () => blip(920, 0.1, "triangle", 0.16),

@@ -204,6 +204,48 @@ assert.deepEqual(reloaded.tags, ["park-1", "park-2"]);
 assert.deepEqual(reloaded.contract, { id: "chaosDriver", progress: 5, claimed: false }, "contract progress survives a reload");
 assert.equal(createInitialState(CAR_MODELS, UPGRADES, reloaded).contract.progress, 5);
 
+// --- Settings and onboarding ---------------------------------------------------------------
+const { SETTINGS_DEFAULTS, createSettings, normalizeSettings } = await import("../src/settings.js");
+const { ONBOARDING_STEPS, createOnboarding } = await import("../src/onboarding.js");
+const junk = normalizeSettings({ master: 9, music: "abc", sfx: -1, quality: "ultra", cameraMode: "far", shake: 7, muted: "yes" });
+assert.equal(junk.master, 1, "volume is clamped");
+assert.equal(junk.music, SETTINGS_DEFAULTS.music, "garbage falls back to the default");
+assert.equal(junk.sfx, 0);
+assert.equal(junk.quality, "medium");
+assert.equal(junk.cameraMode, "far");
+assert.equal(junk.shake, 1.5);
+assert.equal(junk.muted, false, "only a real boolean mutes");
+assert.equal(normalizeSettings({}, true).reducedMotion, true, "prefers-reduced-motion is the default");
+assert.equal(normalizeSettings({ reducedMotion: false }, true).reducedMotion, false, "an explicit choice wins");
+
+const settingsStore = new Map();
+const changes = [];
+const settingsA = createSettings({ storage: { getItem: (k) => settingsStore.get(k) ?? null, setItem: (k, v) => settingsStore.set(k, v) }, onChange: (key) => changes.push(key) });
+settingsA.set("quality", "high");
+settingsA.set("muted", true);
+settingsA.set("quality", "nonsense");
+assert.equal(settingsA.values.quality, "medium", "invalid values are rejected");
+settingsA.set("music", 0.3);
+const settingsB = createSettings({ storage: { getItem: (k) => settingsStore.get(k) ?? null, setItem: () => {} } });
+assert.equal(settingsB.values.muted, true, "mute persists");
+assert.equal(settingsB.values.music, 0.3, "settings persist under their own key");
+assert.deepEqual(changes.slice(0, 2), ["quality", "muted"]);
+
+const tipState = { screen: "playing", paused: false, running: true, player: { speed: 0, drift: 0, nitroActive: false }, wanted: { level: 0 }, stats: { missions: 0 } };
+let finished = false;
+const tour = createOnboarding({ onComplete: () => { finished = true; } });
+assert.equal(tour.update(tipState, 0.1), ONBOARDING_STEPS[0].text);
+tipState.player.speed = 10;
+assert.equal(tour.update(tipState, 1), ONBOARDING_STEPS[0].text, "a step stays visible for a minimum time");
+assert.equal(tour.update(tipState, 3), ONBOARDING_STEPS[1].text, "then advances once the action is done");
+tipState.paused = true;
+assert.equal(tour.update(tipState, 500), ONBOARDING_STEPS[1].text, "paused time does not count");
+tipState.paused = false;
+for (let i = 0; i < 30; i += 1) tour.update(tipState, 20);
+assert.equal(tour.active, false, "all steps time out eventually");
+assert.equal(finished, true);
+assert.equal(createOnboarding({ isDone: () => true }).update(tipState, 1), "", "finished tutorial stays hidden");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

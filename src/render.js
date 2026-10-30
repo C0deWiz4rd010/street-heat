@@ -167,6 +167,7 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
     let bloomTarget = [0.3, 0.55, 0.95];
     let nitroBlend = 0;
     let lightning = 0;
+    let reducedMotion = false;
     let speedTarget = 0;
     let speedBlend = 0;
     const shadowStep = (SHADOW_HALF_EXTENT * 2) / 2048;
@@ -229,6 +230,10 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         SUN_OFFSET.set(-40 + 85 * day, 30 + 28 * day, -32);
     }
 
+    function setReducedMotion(value) {
+        reducedMotion = Boolean(value);
+    }
+
     function setSpeed(ratio) {
         speedTarget = ratio;
     }
@@ -255,9 +260,9 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
 
         const nitro = player?.nitroActive ? 1 : 0;
         nitroBlend += (nitro - nitroBlend) * (1 - Math.exp(-dt * 6));
-        grade.uAberration.value = nitroBlend * 0.014;
+        grade.uAberration.value = reducedMotion ? 0 : nitroBlend * 0.014;
         speedBlend += (speedTarget - speedBlend) * (1 - Math.exp(-dt * 4));
-        grade.uSpeed.value = Math.max(0, (speedBlend - 0.6) / 0.4);
+        grade.uSpeed.value = reducedMotion ? 0 : Math.max(0, (speedBlend - 0.6) / 0.4);
         grade.uTime.value += dt;
 
         lightning = Math.max(0, lightning - dt * 2.4);
@@ -304,6 +309,7 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         setAtmosphere,
         setDaylight,
         setSpeed,
+        setReducedMotion,
         flashLightning,
     };
 }

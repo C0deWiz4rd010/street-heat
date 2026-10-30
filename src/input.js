@@ -11,7 +11,9 @@ export function createInput({ onRestart, onSwitchCar, onUserGesture }) {
         keys[key] = true;
         onUserGesture?.();
 
-        if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "F3", "F4"].includes(event.key)) {
+        // Menus keep their keyboard behaviour: Space/arrows must still reach focused controls.
+        const onControl = event.target?.closest?.("button, input, select, textarea, a");
+        if (!onControl && ["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight", " ", "F3", "F4"].includes(event.key)) {
             event.preventDefault();
         }
 

@@ -256,13 +256,23 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (input.consume("f3")) state.debug.enabled = !state.debug.enabled;
         if (input.consume("f4")) {
             post.cycleQuality();
+            if (state.settings) state.settings.quality = post.getQuality();
+            state.saveSettings?.();
             setStatus(`Grafik: ${post.getQualityConfig().label}`, 1.6);
         }
         if (input.consume("g")) toggleGarage();
+        if (input.consume("escape") && state.running && state.screen === "playing") {
+            state.paused = !state.paused;
+            setStatus(state.paused ? "Pause." : "Zurück auf der Straße.", 1.4);
+        }
         if (input.consume("c")) {
             const order = Object.keys(CONFIG.camera.modes);
-            state.cameraMode = order[(order.indexOf(state.cameraMode ?? "normal") + 1) % order.length];
-            setStatus(`Kamera: ${{ near: "Nah", normal: "Normal", far: "Weit" }[state.cameraMode]}`, 1.4);
+            const current = state.settings?.cameraMode ?? state.cameraMode ?? "normal";
+            const nextMode = order[(order.indexOf(current) + 1) % order.length];
+            state.cameraMode = nextMode;
+            if (state.settings) state.settings.cameraMode = nextMode;
+            state.saveSettings?.();
+            setStatus(`Kamera: ${{ near: "Nah", normal: "Normal", far: "Weit" }[nextMode]}`, 1.4);
         }
         if (state.running && input.consume("p")) {
             state.paused = !state.paused;
@@ -1935,7 +1945,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const leanZ = latZ * latSpeed * 0.06;
 
         // Heat and cops close by raise the camera so more of the chase stays visible.
-        const cameraMode = CONFIG.camera.modes[state.cameraMode] ?? CONFIG.camera.modes.normal;
+        const cameraMode = CONFIG.camera.modes[state.settings?.cameraMode ?? state.cameraMode] ?? CONFIG.camera.modes.normal;
         let copsNear = 0;
         for (const agent of police) {
             if (distanceSq(player.x, player.z, agent.x, agent.z) < 30 * 30) copsNear += 1;
@@ -1966,7 +1976,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         // Phase 4: Shake-Profile (impact + engine + drift composite)
         const engineShake = speedRatio > 0.9 ? (speedRatio - 0.9) * 0.6 : 0;
         const driftShake = driftFactor > 0.7 ? (driftFactor - 0.7) * 0.55 : 0;
-        const composite = (state.cameraShake ?? 0) + engineShake + driftShake;
+        const shakeScale = state.settings ? (state.settings.reducedMotion ? 0 : state.settings.shake) : 1;
+        const composite = ((state.cameraShake ?? 0) + engineShake + driftShake) * shakeScale;
         if (state.cameraShake > 0) {
             state.cameraShake = Math.max(0, state.cameraShake - dt * 3.2);
         }
