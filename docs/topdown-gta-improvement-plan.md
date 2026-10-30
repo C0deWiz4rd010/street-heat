@@ -18,10 +18,10 @@ Das Projekt ist ein modulares Three.js-Spiel (Vite, ES Modules) mit vier Bezirke
 | 5 | UI/UX: Einstellungen, Pause, Onboarding, Mobile, Barrierefreiheit | erledigt |
 | 6 | Audio: Mix mit Limiter, Motor, Sirenen, Effekte, Musik | erledigt |
 | 7 | Controller, Rebinding, Tastatur-Rampe | erledigt |
-| 8 | Code-Qualität, Tests, Doku, Save v3 | erledigt, `systems.js` ist zu zwei Dritteln zerlegt (Kamera, Wetter, Tags, Rennen, Verkehr, Polizei ausgelagert) |
+| 8 | Code-Qualität, Tests, Doku, Save v3 | erledigt, `systems.js` ist zu drei Vierteln zerlegt (Kamera, Wetter, Tags, Rennen, Verkehr, Polizei, Missionen ausgelagert) |
 
 ## Bewusst offen
-- `systems.js` (rund 2.700 Zeilen) enthält noch Spieler, Missionen, Pickups, Events und Garage. Reihenfolge der nächsten Auslagerungen: Missionen, Spieler.
+- `systems.js` (rund 2.150 Zeilen) enthält noch Spieler, Pickups, Events und Garage. Nächste Auslagerung: der Spieler.
 - Gebäudekörper werden nicht per `mergeGeometries` zusammengeführt (jedes Gebäude hat ein eigenes Material).
 - Preise und Run-Auszahlung (`src/economy.js`) beruhen auf Annahmen und sind nicht durchgespielt.
 - Messungen der Bildrate gehören auf die Zielhardware; das Browser-Pane der Entwicklung rendert in Software.

@@ -12,6 +12,7 @@ main.js            verdrahtet Renderer, Welt, Runtime, Input, Settings, Audio un
  │   ├─ systems/camera.js   Folgekamera, Heat-Zoom, Shake
  │   ├─ systems/traffic.js  Verkehr: Spawning je Bezirk, Achsenfahrt, Trennung, Beinahe-Treffer
  │   ├─ systems/police.js   Polizei: Rollen, Straßenverfolgung, Sichtlinie, Abgang, Kollisionen
+ │   ├─ systems/missions.js Missionen: Auswahl aus Daten, Modifier, Bonusziele, Abgabe, Bosse, Fail und Retry
  │   ├─ systems/weather.js  Tag/Nacht, Wetterfarben und -licht, Blitze, Dampf
  │   ├─ systems/tags.js     Graffiti-Tags
  │   └─ systems/race.js     illegales Straßenrennen
@@ -52,7 +53,9 @@ raceSystem.update(dt);
 
 Helferfunktionen (`addScore`, `setStatus`, `spawnPopup` …) sind Funktionsdeklarationen in der Runtime und stehen deshalb schon vor ihrer Textstelle zur Verfügung. Nach jedem Auslagern prüft ein Test-Run, dass nichts fehlt (Import-Check per Parser, Browser-Lauf, `npm test`).
 
-Noch in `systems.js`: Spieler-Update, Missionen, Pickups, Events, Garage und Economy-Aktionen. Nächste Kandidaten von der Kopplung her: Missionen, dann Spieler. `traffic` und `police` sind weiter Arrays der Runtime, die Kamera, Minimap und Audio mitlesen; die Systeme bekommen sie hineingereicht.
+Noch in `systems.js`: Spieler-Update, Pickups, Events, Garage und Economy-Aktionen, dazu die gemeinsamen Helfer (`addScore`, `setStatus`, `spawnParticle` ...), die alle Systeme hineingereicht bekommen. Nächster Kandidat ist der Spieler. `traffic`, `police`, `pickups` und `roadblocks` sind weiter Arrays der Runtime, die Kamera, Minimap und Audio mitlesen.
+
+Hinweis zur Reihenfolge: Die Fabriken werden mitten in `createGameRuntime` aufgerufen. Was ihnen als Wert übergeben wird, muss dort schon existieren, deshalb sind die Helfer Funktionsdeklarationen (hoisted) und keine `const`-Pfeilfunktionen.
 
 ## Fixer Takt und Reihenfolge pro Frame
 
