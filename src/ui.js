@@ -208,7 +208,11 @@ export function mountHud(root) {
                 <label>Screen-Shake <input type="range" id="setShake" min="0" max="1.5" step="0.1"></label>
                 <label class="check"><input type="checkbox" id="setReduced"> Reduzierte Bewegung</label>
                 <label class="check"><input type="checkbox" id="setMuted"> Ton aus</label>
-                <p class="hint">Tastenbelegung: folgt mit der Controller-Unterstützung.</p>
+                <fieldset class="bindings">
+                    <legend>Tastenbelegung</legend>
+                    <div id="bindingList"></div>
+                    <button id="bindingReset" type="button">Standard</button>
+                </fieldset>
                 <div class="modal-actions">
                     <button id="setOnboarding">Tutorial zurücksetzen</button>
                     <button id="settingsCloseBtn">Schließen</button>
@@ -232,6 +236,7 @@ export function mountHud(root) {
                     <dt>P / Esc</dt><dd>Pause</dd>
                     <dt>R</dt><dd>Run neu starten</dd>
                     <dt>F3 / F4</dt><dd>Debug / Grafikstufe</dd>
+                    <dt>Controller</dt><dd>RT Gas, LT Bremse, Stick lenken, A Nitro, B Handbremse, X Interagieren, Y Provoke, Back Kamera, L3 Garage, Start Pause. D-Pad bedient die Menüs, A bestätigt, B geht zurück.</dd>
                 </dl>
                 <div class="modal-actions"><button id="controlsCloseBtn">Schließen</button></div>
             </div>
@@ -336,6 +341,10 @@ function setText(element, value) {
 // Modal handling: focus moves into the dialog, Tab stays inside, Esc/close restores focus.
 const modalStack = [];
 
+export function topModalPanel() {
+    return modalStack.at(-1)?.panel ?? null;
+}
+
 export function isModalOpen() {
     return modalStack.length > 0;
 }
@@ -363,6 +372,8 @@ export function closeTopModal() {
 
 window.addEventListener("keydown", (event) => {
     if (!modalStack.length) return;
+    // While a key is being captured for rebinding, the input layer takes the key.
+    if (document.body.dataset.capturing === "1") return;
     if (event.key === "Escape") {
         event.preventDefault();
         event.stopImmediatePropagation();

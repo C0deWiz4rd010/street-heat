@@ -43,15 +43,15 @@ export function applyEngine(fwd, ctl, spec, boostedMax, dt) {
     const torque = Math.max(0.2, 1.25 * peakGauss + (1 - ratio) * 0.35);
 
     if (spec.noBrake && (ctl.reverse || !ctl.forward)) {
-        if (ctl.forward) fwd += spec.acceleration * torque * dt;
+        if (ctl.forward) fwd += spec.acceleration * torque * dt * (ctl.throttleAmount ?? 1);
         else fwd -= Math.sign(fwd) * Math.min(Math.abs(fwd), spec.coastFriction * 0.4 * dt);
     } else if (ctl.forward && !ctl.reverse) {
-        fwd += spec.acceleration * torque * dt;
+        fwd += spec.acceleration * torque * dt * (ctl.throttleAmount ?? 1);
     } else if (ctl.reverse && !ctl.forward) {
         if (fwd > 0.3) {
-            fwd = Math.max(0, fwd - spec.brakePower * dt);
+            fwd = Math.max(0, fwd - spec.brakePower * dt * (ctl.brakeAmount ?? 1));
         } else {
-            fwd -= spec.reverseAccel * torque * dt;
+            fwd -= spec.reverseAccel * torque * dt * (ctl.brakeAmount ?? 1);
         }
     } else if (ctl.handbrake) {
         const friction = P.handbrakeBase + spec.gripLevel * P.handbrakePerLevel;

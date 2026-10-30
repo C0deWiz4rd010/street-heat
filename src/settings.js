@@ -1,3 +1,5 @@
+import { DEFAULT_BINDINGS, normalizeBindings } from "./bindings.js";
+
 const SETTINGS_KEY = "street-heat-settings";
 
 export const SETTINGS_DEFAULTS = {
@@ -10,6 +12,7 @@ export const SETTINGS_DEFAULTS = {
     reducedMotion: false,
     muted: false,
     onboardingDone: false,
+    bindings: { ...DEFAULT_BINDINGS },
 };
 
 const QUALITIES = ["low", "medium", "high"];
@@ -30,6 +33,7 @@ export function normalizeSettings(raw = {}, prefersReducedMotion = false) {
         reducedMotion: typeof raw.reducedMotion === "boolean" ? raw.reducedMotion : defaults.reducedMotion,
         muted: raw.muted === true,
         onboardingDone: raw.onboardingDone === true,
+        bindings: normalizeBindings(raw.bindings),
     };
 }
 

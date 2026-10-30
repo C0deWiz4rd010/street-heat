@@ -304,6 +304,49 @@ assert.ok(sirenLevelFor(5, 5, "yelp") <= 1 && sirenLevelFor(1, 5, "wail") < sire
 assert.equal(sirenLevelFor(3, 10, null), 0);
 assert.ok(Object.values(SIREN_MODES).every((m) => m.base - m.depth > 300 && m.base + m.depth < 1400), "all notes stay in a pleasant horn range");
 
+// --- Phase 7: bindings, gamepad reading, keyboard ramp -------------------------------------
+const { DEFAULT_BINDINGS, normalizeBindings, rebind, translateKey } = await import("../src/bindings.js");
+const { PAD, deadzone, readGamepad, rumbleFor, triggersToAxis } = await import("../src/gamepad.js");
+globalThis.document = { addEventListener() {}, querySelectorAll: () => [], getElementById: () => null, body: { dataset: {} } };
+const { rampSteer } = await import("../src/input.js");
+
+assert.equal(translateKey("w"), "w", "default bindings are the identity");
+assert.equal(translateKey("arrowup"), "arrowup", "unowned keys pass through");
+const custom = rebind(DEFAULT_BINDINGS, "nitro", "f");
+assert.equal(custom.nitro, "f");
+assert.equal(translateKey("f", custom), "shift", "the new key acts as nitro");
+assert.equal(translateKey("shift", custom), null, "the old key no longer does");
+const swapped = rebind(DEFAULT_BINDINGS, "throttle", "s");
+assert.equal(swapped.brake, "w", "binding a taken key swaps the two actions");
+assert.equal(translateKey("s", swapped), "w");
+assert.deepEqual(rebind(DEFAULT_BINDINGS, "nitro", "escape"), DEFAULT_BINDINGS, "reserved keys are refused");
+assert.deepEqual(normalizeBindings({ nitro: "f", throttle: "f" }), DEFAULT_BINDINGS, "clashing stored bindings reset");
+assert.equal(normalizeBindings({ nitro: "f" }).nitro, "f");
+assert.deepEqual(normalizeBindings("junk"), DEFAULT_BINDINGS);
+
+assert.equal(deadzone(0.1), 0, "small stick drift is ignored");
+assert.equal(deadzone(1), 1);
+assert.ok(deadzone(0.5) > 0 && deadzone(0.5) < 0.5, "the response is rescaled past the dead zone");
+assert.equal(deadzone(-1), -1);
+const fakePad = {
+    axes: [-0.8, 0.05],
+    buttons: Array.from({ length: 17 }, (_, i) => ({ pressed: i === PAD.a, value: i === PAD.rt ? 0.6 : i === PAD.lt ? 0 : i === PAD.a ? 1 : 0 })),
+};
+const read = readGamepad(fakePad);
+assert.ok(read.steer < -0.7, "left stick left steers left (negative)");
+assert.ok(Math.abs(read.throttle - 0.6) < 0.05, "analog trigger gives partial throttle");
+assert.equal(read.buttons.a, true);
+assert.equal(read.buttons.b, false);
+assert.ok(triggersToAxis(read.throttle, read.brake) < 0, "throttle is forward (negative axis)");
+assert.ok(rumbleFor(1).strong > rumbleFor(0.1).strong && rumbleFor(1).duration > rumbleFor(0.1).duration, "harder hits rumble more");
+
+assert.ok(rampSteer(0, 1, 1 / 60) > 0 && rampSteer(0, 1, 1 / 60) < 0.2, "keyboard steering ramps up gently");
+let ramp = 0;
+for (let i = 0; i < 30; i += 1) ramp = rampSteer(ramp, 1, 1 / 60);
+assert.equal(ramp, 1, "and reaches full lock");
+assert.ok(rampSteer(1, -1, 1 / 60) < rampSteer(1, 0, 1 / 60), "reversing is faster than centring");
+assert.equal(rampSteer(0.05, 0, 1 / 30), 0, "centring does not overshoot zero");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

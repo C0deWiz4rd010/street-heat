@@ -404,16 +404,19 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const nitroMax = getNitroMax();
         const keys = input.keys;
         const stick = input.analog ?? { x: 0, y: 0 };
-        const forward = keys.w || keys.arrowup || stick.y < -0.3 ? 1 : 0;
-        const reverse = keys.s || keys.arrowdown || stick.y > 0.3 ? 1 : 0;
+        // Keys are all-or-nothing; stick and triggers give partial gas and brake.
+        const forwardAmount = keys.w || keys.arrowup ? 1 : clamp(-stick.y, 0, 1);
+        const reverseAmount = keys.s || keys.arrowdown ? 1 : clamp(stick.y, 0, 1);
+        const forward = forwardAmount > 0.12 ? 1 : 0;
+        const reverse = reverseAmount > 0.12 ? 1 : 0;
         const left = keys.a || keys.arrowleft ? 1 : 0;
         const right = keys.d || keys.arrowright ? 1 : 0;
         const handbrake = Boolean(keys[" "]);
-        // The analog stick steers proportionally; keys stay all-or-nothing.
-        const turnInput = Math.abs(stick.x) > 0.12 ? clamp(-stick.x, -1, 1) : left - right;
+        // Stick/pad steer proportionally; the keyboard ramps (input.steer) instead of snapping to full lock.
+        const turnInput = Math.abs(stick.x) > 0.12 ? clamp(-stick.x, -1, 1) : (input.steer ?? left - right);
         state.lastTurnInput = turnInput;
-        const ctl = { forward: forward === 1, reverse: reverse === 1, handbrake, turn: turnInput };
-        player.throttle = ctl.forward ? 1 : ctl.reverse ? 0.3 : 0;
+        const ctl = { forward: forward === 1, reverse: reverse === 1, handbrake, turn: turnInput, throttleAmount: forwardAmount, brakeAmount: reverseAmount };
+        player.throttle = ctl.forward ? forwardAmount : ctl.reverse ? 0.3 : 0;
 
         // Forward/lateral axes from current rotation
         const fwdX = Math.sin(player.rotation);
@@ -567,7 +570,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             // Phase 3.1: less aggressive shake — only on real impact
             if (impactMag > 8) {
                 damagePlayer(impactMag * 0.7 / (mass * 0.75 + 0.25 + armorLevel * 0.18), "crash");
-                audio?.crash(impactMag / 22, { x: next.x, z: next.z });
+                crashFx(impactMag / 22, { x: next.x, z: next.z });
                 state.cameraShake = Math.min(1, impactMag * 0.045);
                 spawnParticle(next.x, next.z, "#ff6a4f", 16);
             }
@@ -584,7 +587,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (impactMag > 5) {
                 const obstacleDamageScale = destroyedReaction?.hitDamageScale ?? hitObstacle?.hitDamageScale ?? 0.55;
                 damagePlayer(impactMag * obstacleDamageScale / (mass * 0.75 + 0.25), "crash");
-                audio?.crash(impactMag / 26, { x: next.x, z: next.z });
+                crashFx(impactMag / 26, { x: next.x, z: next.z });
                 state.cameraShake = Math.min(1, Math.max(impactMag * 0.04, destroyedReaction?.shake ?? hitObstacle?.shake ?? 0));
                 spawnParticle(next.x, next.z, destroyedReaction?.color ?? hitObstacle?.color ?? "#ffc64d", destroyedReaction?.particleCount ?? 18);
             }
@@ -950,7 +953,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                         const sideHit = Math.abs(cross) > 0.7 ? 1.35 : 1;
                         const dmg = impactSpeed * 0.48 * (trafficMass / playerMass) * sideHit;
                         damagePlayer(dmg, "crash");
-                        audio?.crash(impactSpeed / 14, { x: car.x, z: car.z });
+                        crashFx(impactSpeed / 14, { x: car.x, z: car.z });
                         state.cameraShake = Math.min(0.85, impactSpeed * 0.045);
                         spawnParticle((state.player.x + car.x) * 0.5, (state.player.z + car.z) * 0.5, "#ffb14c", 18);
                         registerTrafficCrash();
@@ -1334,7 +1337,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 const crashDamage = impactSpeed * typeFactor * (agentMass / playerMass) * 0.5 / (1 + armorLevel * 0.18);
                 if (crashDamage > 0.5) {
                     damagePlayer(crashDamage, "crash");
-                    audio?.crash(impactSpeed / 14, { x: agent.x, z: agent.z });
+                    crashFx(impactSpeed / 14, { x: agent.x, z: agent.z });
                     state.cameraShake = Math.min(0.9, impactSpeed * 0.05);
                     spawnParticle((state.player.x + agent.x) * 0.5, (state.player.z + agent.z) * 0.5, "#ff5a4c", 20);
                     state.cleanEscape && (state.cleanEscape.crashes = (state.cleanEscape.crashes ?? 0) + 1);
@@ -1417,7 +1420,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 applySpeedFactor(state.player, 0.32);
                 state.cameraShake = Math.max(state.cameraShake, 0.55);
                 state.stats.roadblocks += 1;
-                audio?.crash(0.8, { x: block.x, z: block.z });
+                crashFx(0.8, { x: block.x, z: block.z });
                 spawnParticle(block.x, block.z, "#ff9c45", 26);
                 setStatus("Roadblock getroffen. Raus aus der Linie.", 1.8);
             }
@@ -2505,6 +2508,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (nearMiss.streak >= 3) {
             setStatus(`Near-Miss Streak x${nearMiss.streak}! Tempo behalten.`, 1.4);
         }
+    }
+
+    /** Impact feedback: sound plus controller rumble, both scaled by the force (0..1). */
+    function crashFx(force, at) {
+        audio?.crash(force, at);
+        state.rumble?.(Math.max(0.1, Math.min(1, force)));
     }
 
     function spawnParticle(x, z, color, count) {

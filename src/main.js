@@ -5,7 +5,9 @@ import { createInput } from "./input.js";
 import { createRenderPipeline } from "./render.js";
 import { createInitialState } from "./state.js";
 import { createGameRuntime } from "./systems.js";
-import { closeModal, hideGameOver, isModalOpen, mountHud, openModal } from "./ui.js";
+import { closeModal, closeTopModal, hideGameOver, mountHud, openModal, topModalPanel } from "./ui.js";
+import { ACTION_LABELS, DEFAULT_BINDINGS, keyLabel, rebind } from "./bindings.js";
+import { confirmFocus, moveFocus } from "./menuNav.js";
 import { createOnboarding } from "./onboarding.js";
 import { createSettings } from "./settings.js";
 import { createMaterial } from "./vehicles.js";
@@ -102,12 +104,78 @@ function syncMuteButton() {
 for (const key of ["master", "music", "sfx", "muted", "quality", "reducedMotion"]) applySetting(key);
 syncMuteButton();
 
+// Which dialog or menu currently owns the controller (null while driving).
+function menuScope() {
+    const modal = topModalPanel();
+    if (modal) return modal;
+    if (state.screen === "garage") return ui.garagePanel;
+    if (state.screen === "gameover") return ui.gameOver;
+    if (state.screen === "menu") return ui.mainMenu;
+    if (state.paused && state.screen === "playing") return ui.pauseOverlay;
+    return null;
+}
+
 const input = createInput({
+    bindings: settings.values.bindings,
     onRestart: () => {
         if (state.screen === "playing" || state.screen === "gameover") runtime.reset();
     },
     onSwitchCar: (index) => runtime.switchCar(index),
     onUserGesture: () => audio.unlock(),
+    menuActive: () => menuScope() !== null,
+    onMenuMove: (direction) => {
+        const scope = menuScope();
+        if (scope) moveFocus(scope, direction);
+    },
+    onMenuConfirm: () => {
+        const scope = menuScope();
+        if (scope) confirmFocus(scope);
+    },
+    onMenuBack: () => {
+        if (topModalPanel()) closeTopModal();
+        else if (state.screen === "garage") runtime.closeGarage();
+        else if (state.paused && state.screen === "playing") state.paused = false;
+    },
+    onPadConnection: (connected) => {
+        state.statusMessage = connected ? "Controller verbunden." : "Controller getrennt.";
+        state.statusTimer = 2.5;
+    },
+});
+state.rumble = (force) => input.rumble(force);
+
+// Key rebinding list inside the settings dialog.
+const bindingList = document.getElementById("bindingList");
+function renderBindings() {
+    bindingList.innerHTML = "";
+    for (const action of Object.keys(DEFAULT_BINDINGS)) {
+        const row = document.createElement("div");
+        row.className = "binding-row";
+        const label = document.createElement("span");
+        label.textContent = ACTION_LABELS[action];
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = keyLabel(settings.values.bindings[action]);
+        button.setAttribute("aria-label", `${ACTION_LABELS[action]}: Taste ${keyLabel(settings.values.bindings[action])}, zum Ändern drücken`);
+        button.addEventListener("click", () => {
+            button.textContent = "Taste drücken …";
+            input.captureNextKey((key) => {
+                if (key) {
+                    const next = rebind(settings.values.bindings, action, key);
+                    settings.set("bindings", next);
+                    input.setBindings(settings.values.bindings);
+                }
+                renderBindings();
+            });
+        });
+        row.append(label, button);
+        bindingList.append(row);
+    }
+}
+renderBindings();
+document.getElementById("bindingReset").addEventListener("click", () => {
+    settings.set("bindings", { ...DEFAULT_BINDINGS });
+    input.setBindings(settings.values.bindings);
+    renderBindings();
 });
 
 ui.restartBtn.addEventListener("click", () => runtime.reset());
@@ -224,6 +292,7 @@ const clock = new THREE.Clock();
 function animate() {
     requestAnimationFrame(animate);
     const dt = Math.min(clock.getDelta(), 0.05);
+    input.update(dt);
     state.tip = onboarding.update(state, dt);
     runtime.update(dt, input);
 }

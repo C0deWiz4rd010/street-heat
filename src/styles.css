@@ -1396,3 +1396,41 @@ select:focus-visible,
     cursor: not-allowed;
     opacity: 0.4;
 }
+
+.bindings {
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    display: grid;
+    gap: 8px;
+    padding: 10px 12px;
+}
+
+.bindings legend {
+    color: var(--muted);
+    font-size: 12px;
+    padding: 0 6px;
+}
+
+.binding-row {
+    align-items: center;
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+}
+
+.binding-row button,
+#bindingReset {
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    color: var(--ink);
+    cursor: pointer;
+    font: inherit;
+    min-height: 34px;
+    min-width: 96px;
+    padding: 0 10px;
+}
+
+#bindingReset {
+    justify-self: end;
+}
