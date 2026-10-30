@@ -83,6 +83,10 @@ export function createCar(model, sharedMaterials, options = {}) {
 }
 
 export function replaceCarModel(target, nextModel, sharedMaterials) {
+    target.traverse((node) => {
+        if (node.geometry && !node.geometry.userData.shared) node.geometry.dispose();
+        if (node.material && !node.material.userData.shared) node.material.dispose();
+    });
     target.clear();
     const next = createCar(nextModel, sharedMaterials);
     while (next.children.length > 0) {

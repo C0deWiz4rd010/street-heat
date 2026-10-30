@@ -134,6 +134,10 @@ export function createInitialState() {
             enabled: false,
             fps: 0,
             entities: 0,
+            drawCalls: 0,
+            triangles: 0,
+            geometries: 0,
+            textures: 0,
         },
         statusMessage: "Direkt im Spiel. Fahre los.",
         statusTimer: 0,
@@ -154,7 +158,7 @@ export function createInitialState() {
         },
         // Phase 6.2: clean-escape tracking
         cleanEscape: {
-            startedAt: 0,
+            elapsed: 0,       // game-time seconds since heat 4 was reached
             active: false,
             crashes: 0,
         },

@@ -1,10 +1,13 @@
+// A key press stays consumable only briefly, so an unused E/G/Q press cannot fire later.
+const PRESS_WINDOW_MS = 250;
+
 export function createInput({ onRestart, onSwitchCar, onUserGesture }) {
     const keys = Object.create(null);
     const pressed = Object.create(null);
 
     window.addEventListener("keydown", (event) => {
         const key = event.key.toLowerCase();
-        if (!keys[key]) pressed[key] = true;
+        if (!keys[key]) pressed[key] = performance.now();
         keys[key] = true;
         onUserGesture?.();
 
@@ -29,7 +32,7 @@ export function createInput({ onRestart, onSwitchCar, onUserGesture }) {
         const press = (event) => {
             event.preventDefault();
             keys[key] = true;
-            pressed[key] = true;
+            pressed[key] = performance.now();
             onUserGesture?.();
         };
         const release = (event) => {
@@ -43,9 +46,9 @@ export function createInput({ onRestart, onSwitchCar, onUserGesture }) {
     }
 
     function consume(key) {
-        const wasPressed = Boolean(pressed[key]);
-        pressed[key] = false;
-        return wasPressed;
+        const stamp = pressed[key] ?? 0;
+        pressed[key] = 0;
+        return stamp > 0 && performance.now() - stamp < PRESS_WINDOW_MS;
     }
 
     return { keys, consume };

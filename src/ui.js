@@ -547,6 +547,9 @@ function renderDebug(ui, state, groups) {
     ui.debugPanel.innerHTML = `
         FPS ${Math.round(state.debug.fps)}<br>
         Entities ${entityCount}<br>
+        Draw Calls ${state.debug.drawCalls}<br>
+        Dreiecke ${Math.round(state.debug.triangles / 1000)}k<br>
+        Geometrien ${state.debug.geometries} | Texturen ${state.debug.textures}<br>
         Zeit ${state.time.label}<br>
         Weather ${state.weather.label}<br>
         Heat ${state.wanted.level} ${state.wanted.tier}<br>

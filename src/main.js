@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { createAudioDirector } from "./audio.js";
+import { markShared } from "./effects.js";
 import { createInput } from "./input.js";
 import { createInitialState } from "./state.js";
 import { createGameRuntime } from "./systems.js";
@@ -68,11 +69,15 @@ const sharedMaterials = {
     dark: createMaterial("#10151c", { roughness: 0.45, metalness: 0.25 }),
 };
 
+markShared(...Object.values(sharedMaterials));
+
 const world = createWorld(scene, sharedMaterials);
 const lights = { ambient, sun, nightGlow };
 const runtime = createGameRuntime({ scene, camera, renderer, world, ui, state, sharedMaterials, audio, lights });
 const input = createInput({
-    onRestart: () => runtime.reset(),
+    onRestart: () => {
+        if (state.screen === "playing" || state.screen === "gameover") runtime.reset();
+    },
     onSwitchCar: (index) => runtime.switchCar(index),
     onUserGesture: () => audio.unlock(),
 });

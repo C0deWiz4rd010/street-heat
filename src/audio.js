@@ -112,7 +112,9 @@ export function createAudioDirector() {
 
         // Phase 7.1: Doppler-like siren — approaching cop = higher pitch, receding = lower
         const nearestDist = state.nearestPoliceDistance ?? Infinity;
-        const closingRate = (lastSirenDist - nearestDist) / Math.max(dt, 0.001);
+        const closingRate = Number.isFinite(lastSirenDist) && Number.isFinite(nearestDist)
+            ? (lastSirenDist - nearestDist) / Math.max(dt, 0.001)
+            : 0;
         lastSirenDist = nearestDist;
         const distFactor = nearestDist < 85 ? Math.min(1, Math.pow(1 - nearestDist / 85, 0.6)) : 0;
         const sirenBase = state.wanted.level > 0 && engineActive ? 0.025 + state.wanted.level * 0.022 : 0;

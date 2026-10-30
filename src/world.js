@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { CONFIG, DISTRICTS, POIS } from "./config.js";
+import { markShared } from "./effects.js";
 import { createMaterial } from "./vehicles.js";
 
 export function createWorld(scene, sharedMaterials) {
@@ -116,11 +117,58 @@ export function createWorld(scene, sharedMaterials) {
 
     createScannerZones(scene, scannerZones);
 
-    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones };
+    const grid = {
+        buildings: buildGrid(buildings, 6),
+        obstacles: buildGrid(obstacles, 8),
+    };
+
+    return { buildings, obstacles, objects, pointsOfInterest: POIS, districts: DISTRICTS, shortcutZones, scannerZones, grid };
+}
+
+// Uniform grid: each item is registered in every cell its (margin-expanded) box touches,
+// so a lookup at (x, z) only needs the single cell containing that point.
+const GRID_CELL = 8;
+const GRID_OFFSET = 24;
+const GRID_STRIDE = 64;
+const EMPTY_CELL = [];
+
+function gridKey(x, z) {
+    return (Math.floor(x / GRID_CELL) + GRID_OFFSET) * GRID_STRIDE + Math.floor(z / GRID_CELL) + GRID_OFFSET;
+}
+
+function buildGrid(items, margin) {
+    const cells = new Map();
+    for (const item of items) {
+        const hw = item.hw ?? item.radius ?? 0;
+        const hd = item.hd ?? item.radius ?? 0;
+        const minX = Math.floor((item.x - hw - margin) / GRID_CELL);
+        const maxX = Math.floor((item.x + hw + margin) / GRID_CELL);
+        const minZ = Math.floor((item.z - hd - margin) / GRID_CELL);
+        const maxZ = Math.floor((item.z + hd + margin) / GRID_CELL);
+        for (let cx = minX; cx <= maxX; cx += 1) {
+            for (let cz = minZ; cz <= maxZ; cz += 1) {
+                const key = (cx + GRID_OFFSET) * GRID_STRIDE + cz + GRID_OFFSET;
+                const bucket = cells.get(key);
+                if (bucket) bucket.push(item);
+                else cells.set(key, [item]);
+            }
+        }
+    }
+    return cells;
+}
+
+export function buildingsNear(world, x, z) {
+    if (!world.grid) return world.buildings; // still generating the world
+    return world.grid.buildings.get(gridKey(x, z)) ?? EMPTY_CELL;
+}
+
+export function obstaclesNear(world, x, z) {
+    if (!world.grid) return world.obstacles;
+    return world.grid.obstacles.get(gridKey(x, z)) ?? EMPTY_CELL;
 }
 
 export function insideBuilding(world, x, z, radius) {
-    for (const building of world.buildings) {
+    for (const building of buildingsNear(world, x, z)) {
         const closestX = clamp(x, building.x - building.hw, building.x + building.hw);
         const closestZ = clamp(z, building.z - building.hd, building.z + building.hd);
         const dx = x - closestX;
@@ -132,7 +180,7 @@ export function insideBuilding(world, x, z, radius) {
 
 export function pushOutBuildings(world, pos, radius) {
     let hit = false;
-    for (const building of world.buildings) {
+    for (const building of buildingsNear(world, pos.x, pos.z)) {
         const cx = clamp(pos.x, building.x - building.hw, building.x + building.hw);
         const cz = clamp(pos.z, building.z - building.hd, building.z + building.hd);
         const dx = pos.x - cx;
@@ -161,7 +209,7 @@ export function pushOutBuildings(world, pos, radius) {
 }
 
 export function obstacleAt(world, x, z, radius) {
-    for (const obstacle of world.obstacles) {
+    for (const obstacle of obstaclesNear(world, x, z)) {
         if (obstacle.destroyed) continue;
         const dx = x - obstacle.x;
         const dz = z - obstacle.z;
@@ -835,6 +883,48 @@ function createDockRamp(x, z, material) {
     return group;
 }
 
+let lampPoolGeometry = null;
+let lampPoolTexture = null;
+const lampPoolMaterials = new Map();
+
+function getLampPoolGeometry() {
+    if (!lampPoolGeometry) {
+        lampPoolGeometry = new THREE.PlaneGeometry(10, 10);
+        markShared(lampPoolGeometry);
+    }
+    return lampPoolGeometry;
+}
+
+function getLampPoolMaterial(tint) {
+    if (!lampPoolTexture) {
+        const canvas = document.createElement("canvas");
+        canvas.width = 64;
+        canvas.height = 64;
+        const context = canvas.getContext("2d");
+        const gradient = context.createRadialGradient(32, 32, 0, 32, 32, 32);
+        gradient.addColorStop(0, "rgba(255,255,255,0.9)");
+        gradient.addColorStop(0.45, "rgba(255,255,255,0.28)");
+        gradient.addColorStop(1, "rgba(255,255,255,0)");
+        context.fillStyle = gradient;
+        context.fillRect(0, 0, 64, 64);
+        lampPoolTexture = new THREE.CanvasTexture(canvas);
+    }
+    let material = lampPoolMaterials.get(tint);
+    if (!material) {
+        material = new THREE.MeshBasicMaterial({
+            color: tint,
+            map: lampPoolTexture,
+            transparent: true,
+            opacity: 0.42,
+            blending: THREE.AdditiveBlending,
+            depthWrite: false,
+        });
+        markShared(material);
+        lampPoolMaterials.set(tint, material);
+    }
+    return material;
+}
+
 function createLamp(scene, obstacles, x, z, tint = "#ffc64d") {
     const group = new THREE.Group();
     const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.12, 4.5, 8), createMaterial("#10151c", { roughness: 0.45, metalness: 0.25 }));
@@ -844,9 +934,13 @@ function createLamp(scene, obstacles, x, z, tint = "#ffc64d") {
     const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.28, 10, 8), createMaterial("#ffe9b0", { emissive: tint, emissiveIntensity: 0.82 }));
     lamp.position.y = 4.55;
     group.add(lamp);
-    const light = new THREE.PointLight(tint, 0.55, 12);
-    light.position.y = 4.3;
-    group.add(light);
+    // Fake light pool on the ground instead of a PointLight: ~50 real lights made every
+    // material shader loop over all of them (and recompile when a lamp was destroyed).
+    const pool = new THREE.Mesh(getLampPoolGeometry(), getLampPoolMaterial(tint));
+    pool.rotation.x = -Math.PI / 2;
+    pool.position.y = 0.16;
+    pool.renderOrder = 1;
+    group.add(pool);
     group.position.set(x, 0, z);
     scene.add(group);
     obstacles.push({

@@ -2,13 +2,15 @@ import * as THREE from "three";
 import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, UPGRADES, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
+import { createEffects, disposeObject, markShared } from "./effects.js";
 import { createCar, createMaterial, replaceCarModel } from "./vehicles.js";
-import { insideBuilding, obstacleAt, pushOutBuildings, snapStreet } from "./world.js";
+import { buildingsNear, insideBuilding, obstacleAt, obstaclesNear, pushOutBuildings, snapStreet } from "./world.js";
 
 const MISSION_DISTRICT_ORDER = ["downtown", "industrial", "park", "harbor"];
 
 const PHYSICS_DT = 1 / 60;
 const PHYSICS_MAX_STEPS = 5;
+const PROFILE_FLUSH_MS = 2000;
 
 const DISTRICT_MISSION_POINTS = {
     downtown: [
@@ -44,20 +46,24 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const roadblocks = [];
     const hazards = [];
     const eventPickups = [];
-    const particles = [];
-    const skidMarks = [];
-    const rainDrops = [];
+    const effects = createEffects(scene);
     let missionBoss = null;
     const helicopter = createHelicopterMesh();
     const pickupGeo = new THREE.OctahedronGeometry(0.55, 0);
-    const particleGeo = new THREE.BoxGeometry(0.14, 0.14, 0.14);
     const eventGeo = new THREE.DodecahedronGeometry(0.85, 0);
     const hazardGeo = new THREE.BoxGeometry(4.8, 0.08, 0.7);
+    markShared(pickupGeo, eventGeo, hazardGeo);
     const tempTarget = new THREE.Vector3();
     const debugClock = { frames: 0, timer: 0 };
     let scannerCharge = 0;
     let activeScannerZoneId = null;
     let physicsAccumulator = 0;
+    let profileDirty = false;
+    let lastProfileFlush = 0;
+    window.addEventListener("pagehide", () => flushProfile());
+    document.addEventListener("visibilitychange", () => {
+        if (document.hidden) flushProfile();
+    });
     const playerCar = createCar(CAR_MODELS[state.playerModelIndex], sharedMaterials);
     playerCar.position.set(0, 0.38, 0);
     scene.add(playerCar);
@@ -86,6 +92,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.popup = { text: "", timer: 0, type: "normal" };
         state.nearMiss = { count: 0, timer: 0, streak: 0, streakTimer: 0 };
         state.nearestPoliceDistance = Infinity;
+        state.provoke = { cooldown: 0, active: 0, fxTimer: 0 };
+        state.cleanEscape = { elapsed: 0, active: false, crashes: 0 };
+        state.policeAssignments = {};
+        state.policeAssignmentTimer = 0;
+        state.miniPursuitTimer = 0;
+        state.wallSlide = 0;
         state.wanted.level = 0;
         state.wanted.status = "CLEAR";
         state.wanted.decay = 0;
@@ -147,9 +159,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         clearEntities(roadblocks);
         clearEntities(hazards);
         clearEntities(eventPickups);
-        clearEntities(particles);
-        clearEntities(skidMarks);
-        clearEntities(rainDrops);
+        effects.clear();
 
         setMission(1);
         for (let index = 0; index < CONFIG.pickups.startCount; index += 1) spawnPickup();
@@ -176,10 +186,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (state.cleanEscape) {
             if (!state.cleanEscape.active && state.wanted.level >= 4) {
                 state.cleanEscape.active = true;
-                state.cleanEscape.startedAt = performance.now();
+                state.cleanEscape.elapsed = 0;
                 state.cleanEscape.crashes = 0;
             } else if (state.cleanEscape.active) {
-                const elapsed = (performance.now() - state.cleanEscape.startedAt) / 1000;
+                state.cleanEscape.elapsed += dt;
+                const elapsed = state.cleanEscape.elapsed;
                 if (state.wanted.level === 0 && state.cleanEscape.crashes === 0 && elapsed < 60) {
                     addCash(500);
                     addScore(700, true);
@@ -213,6 +224,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function update(realDt, input) {
+        if (profileDirty && performance.now() - lastProfileFlush >= PROFILE_FLUSH_MS) flushProfile();
+        lights.nightGlow.position.set(state.player.x, 22, state.player.z);
         if (state.statusTimer > 0) state.statusTimer = Math.max(0, state.statusTimer - realDt);
         if (input.consume("f3")) state.debug.enabled = !state.debug.enabled;
         if (input.consume("g")) toggleGarage();
@@ -709,7 +722,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         audio?.collect();
         spawnParticle(pickup.x, pickup.z, info.color, 16);
         setStatus(`${info.label} aufgenommen. +${Math.round(gained)} Score.`, 1.5);
-        scene.remove(pickup.mesh);
+        removeMesh(pickup.mesh);
         pickups.splice(index, 1);
 
         if (state.mission.type === "pickup") {
@@ -981,7 +994,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.wanted.emp = Math.max(0, state.wanted.emp - dt);
         const targetPolice = Math.max(0, heatTier.police - (state.wanted.emp > 0 ? 6 : 0));
         while (police.length < targetPolice && police.length < CONFIG.police.maxCount) spawnPolice(true);
-        while (police.length > targetPolice && police.length > 0) scene.remove(police.pop().mesh);
+        while (police.length > targetPolice && police.length > 0) removeMesh(police.pop().mesh);
 
         // Phase 5.3: re-assign roles periodically
         state.policeAssignmentTimer = (state.policeAssignmentTimer ?? 0) - dt;
@@ -1219,7 +1232,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (const agent of retiredAgents) {
             const agentIndex = police.indexOf(agent);
             if (agentIndex >= 0) {
-                scene.remove(agent.mesh);
+                removeMesh(agent.mesh);
                 police.splice(agentIndex, 1);
             }
         }
@@ -1275,8 +1288,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                 setStatus("Roadblock getroffen. Raus aus der Linie.", 1.8);
             }
 
-            if (block.life <= 0 || state.wanted.level < 2) {
-                scene.remove(block.mesh);
+            if (block.life <= 0 || (state.wanted.level < 2 && !block.bossOwned)) {
+                removeMesh(block.mesh);
                 roadblocks.splice(index, 1);
             }
         }
@@ -1304,7 +1317,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
                     setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
                     if (hazard.consumeOnHit !== false) {
-                        scene.remove(hazard.mesh);
+                        removeMesh(hazard.mesh);
                         hazards.splice(index, 1);
                     }
                 } else if (hazard.type === "fallenLamp") {
@@ -1325,13 +1338,13 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     state.player.nitro = Math.max(0, state.player.nitro - 22);
                     spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
                     setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
-                    scene.remove(hazard.mesh);
+                    removeMesh(hazard.mesh);
                     hazards.splice(index, 1);
                 }
                 continue;
             }
             if (hazard.life <= 0) {
-                scene.remove(hazard.mesh);
+                removeMesh(hazard.mesh);
                 hazards.splice(index, 1);
             }
         }
@@ -1490,9 +1503,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         }
 
         if (state.weather.mode === "rain" || state.weather.mode === "storm") {
-            const rainBursts = state.weather.mode === "storm" ? 5 : 3;
+            // 180 (rain) / 300 (storm) drops per second, independent of the step size
+            const rainRate = state.weather.mode === "storm" ? 300 : 180;
+            const rainBursts = Math.floor(rainRate * dt + Math.random());
             for (let i = 0; i < rainBursts; i += 1) {
-                spawnRainDrop(
+                effects.spawnRain(
                     state.player.x + (Math.random() - 0.5) * 54,
                     state.player.z + (Math.random() - 0.5) * 54
                 );
@@ -1770,10 +1785,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function removeWorldEvent(index) {
         const event = eventPickups[index];
         if (!event) return;
-        scene.remove(event.mesh);
+        removeMesh(event.mesh);
         if (event.barriers) {
             for (const barrier of event.barriers) {
-                scene.remove(barrier.mesh);
+                removeMesh(barrier.mesh);
                 const hazardIndex = hazards.indexOf(barrier);
                 if (hazardIndex >= 0) hazards.splice(hazardIndex, 1);
             }
@@ -1784,27 +1799,8 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.worldEvent.timer = 18 + Math.random() * 28;
     }
 
-    function spawnRainDrop(x, z) {
-        if (rainDrops.length > 90) return;
-        const mesh = new THREE.Mesh(
-            new THREE.BoxGeometry(0.035, 1.1, 0.035),
-            createMaterial("#8fd8ff", { emissive: "#63c8ff", emissiveIntensity: 0.35, transparent: true, opacity: 0.45 })
-        );
-        mesh.position.set(x, 12 + Math.random() * 12, z);
-        scene.add(mesh);
-        rainDrops.push({ mesh, life: 0.55 + Math.random() * 0.35 });
-    }
-
     function updateRain(dt) {
-        for (let index = rainDrops.length - 1; index >= 0; index -= 1) {
-            const drop = rainDrops[index];
-            drop.life -= dt;
-            drop.mesh.position.y -= dt * 24;
-            if (drop.life <= 0 || drop.mesh.position.y <= 0.35) {
-                scene.remove(drop.mesh);
-                rainDrops.splice(index, 1);
-            }
-        }
+        effects.updateRain(dt);
     }
 
     function spawnTraffic() {
@@ -2080,7 +2076,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (let index = police.length - 1; index >= 0; index -= 1) {
             const agent = police[index];
             if (distanceSq(x, z, agent.x, agent.z) < 34 * 34) {
-                scene.remove(agent.mesh);
+                removeMesh(agent.mesh);
                 police.splice(index, 1);
                 disabled += 1;
             }
@@ -2088,7 +2084,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         for (let index = hazards.length - 1; index >= 0; index -= 1) {
             const hazard = hazards[index];
             if (distanceSq(x, z, hazard.x, hazard.z) < 34 * 34) {
-                scene.remove(hazard.mesh);
+                removeMesh(hazard.mesh);
                 hazards.splice(index, 1);
             }
         }
@@ -2105,33 +2101,16 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function addSkidMark() {
-        if (skidMarks.length > 160) {
-            const old = skidMarks.shift();
-            scene.remove(old.mesh);
-        }
-        const driftIntensity = Math.min(1, state.player.drift);
-        const markWidth = 0.32 + driftIntensity * 0.14;
-        const mark = new THREE.Mesh(
-            new THREE.BoxGeometry(markWidth, 0.018, 2.1),
-            createMaterial("#040506", { roughness: 1, transparent: true, opacity: 0.48 })
-        );
-        const rearX = state.player.x - Math.sin(state.player.rotation) * 1.7;
-        const rearZ = state.player.z - Math.cos(state.player.rotation) * 1.7;
-        mark.position.set(rearX, 0.13, rearZ);
-        mark.rotation.y = state.player.rotation;
-        scene.add(mark);
-        skidMarks.push({ mesh: mark, life: 16 });
+        const player = state.player;
+        const model = CAR_MODELS[state.playerModelIndex];
+        const driftIntensity = Math.min(1, player.drift);
+        const rearX = player.x - Math.sin(player.rotation) * 1.7;
+        const rearZ = player.z - Math.cos(player.rotation) * 1.7;
+        effects.addSkid(rearX, rearZ, player.rotation, model.width * 0.45, 0.2 + driftIntensity * 0.1);
     }
 
     function updateSkidMarks(dt) {
-        for (let index = skidMarks.length - 1; index >= 0; index -= 1) {
-            skidMarks[index].life -= dt;
-            skidMarks[index].mesh.material.opacity = Math.max(0, skidMarks[index].life / 16) * 0.48;
-            if (skidMarks[index].life <= 0) {
-                scene.remove(skidMarks[index].mesh);
-                skidMarks.splice(index, 1);
-            }
-        }
+        effects.updateSkids(dt);
     }
 
     function spawnPopup(text, type = "normal") {
@@ -2139,21 +2118,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function spawnDriftSmoke(x, z) {
-        const mesh = new THREE.Mesh(
-            new THREE.SphereGeometry(0.22 + Math.random() * 0.18, 6, 6),
-            createMaterial("#c8cdd6", { roughness: 1, transparent: true, opacity: 0.28 })
-        );
-        mesh.position.set(x, 0.28, z);
-        scene.add(mesh);
-        particles.push({
-            mesh,
-            vx: (Math.random() - 0.5) * 1.4,
-            vy: 0.8 + Math.random() * 0.7,
-            vz: (Math.random() - 0.5) * 1.4,
-            life: 0.6 + Math.random() * 0.5,
-            age: 0,
-            smoke: true,
-        });
+        effects.spawnSmoke(x, z);
     }
 
     function triggerNearMiss() {
@@ -2173,48 +2138,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function spawnParticle(x, z, color, count) {
-        for (let index = 0; index < count; index += 1) {
-            const mesh = new THREE.Mesh(particleGeo, createMaterial(color, { emissive: color, emissiveIntensity: 0.65, transparent: true }));
-            mesh.position.set(x, 0.8 + Math.random() * 0.8, z);
-            scene.add(mesh);
-            particles.push({
-                mesh,
-                vx: (Math.random() - 0.5) * 10,
-                vy: 3 + Math.random() * 7,
-                vz: (Math.random() - 0.5) * 10,
-                life: 0.45 + Math.random() * 0.7,
-                age: 0,
-            });
-        }
+        effects.spawnDebris(x, z, color, count);
     }
 
     function updateParticles(dt) {
-        for (let index = particles.length - 1; index >= 0; index -= 1) {
-            const particle = particles[index];
-            particle.age += dt;
-            if (particle.age >= particle.life) {
-                scene.remove(particle.mesh);
-                particles.splice(index, 1);
-                continue;
-            }
-            const t = particle.age / particle.life;
-            if (particle.smoke) {
-                particle.vx *= 0.96;
-                particle.vz *= 0.96;
-                particle.mesh.position.x += particle.vx * dt;
-                particle.mesh.position.y += particle.vy * dt;
-                particle.mesh.position.z += particle.vz * dt;
-                particle.mesh.scale.setScalar(1 + t * 1.8);
-                particle.mesh.material.opacity = 0.28 * (1 - t);
-            } else {
-                particle.vy -= 12 * dt;
-                particle.mesh.position.x += particle.vx * dt;
-                particle.mesh.position.y += particle.vy * dt;
-                particle.mesh.position.z += particle.vz * dt;
-                particle.mesh.scale.setScalar(1 - t);
-                particle.mesh.material.opacity = 1 - t;
-            }
-        }
+        effects.updateParticles(dt);
     }
 
     function updatePassiveRegen(dt) {
@@ -2255,6 +2183,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             state.screen = "gameover";
             state.bestScore = Math.max(state.bestScore, Math.round(state.score));
             persistProfile();
+            flushProfile();
             showGameOver(ui, state);
         }
     }
@@ -2288,7 +2217,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function addCash(amount) {
-        if (!amount) return;
+        if (!amount) return 0;
         let multiplier = state.screen === "playing" ? state.district?.cashMultiplier ?? 1 : 1;
         // Phase 6.1: provoke cash boost on pickups
         if ((state.provoke?.active ?? 0) > 0) multiplier *= 1.5;
@@ -2536,7 +2465,18 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         openMenu();
     }
 
+    // Saves are throttled: callers only mark the profile dirty, the actual localStorage
+    // write happens at most every PROFILE_FLUSH_MS (plus on tab hide / close).
     function persistProfile() {
+        state.bestScore = Math.max(state.bestScore, Math.round(state.score));
+        profileDirty = true;
+        if (performance.now() - lastProfileFlush >= PROFILE_FLUSH_MS) flushProfile();
+    }
+
+    function flushProfile() {
+        if (!profileDirty) return;
+        profileDirty = false;
+        lastProfileFlush = performance.now();
         state.profile = {
             version: 2,
             bestScore: Math.max(state.bestScore, Math.round(state.score)),
@@ -3002,10 +2942,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
 
     function clearMissionBoss() {
         if (!missionBoss) return;
-        if (missionBoss.mesh) scene.remove(missionBoss.mesh);
+        if (missionBoss.mesh) removeMesh(missionBoss.mesh);
         if (missionBoss.blockers) {
             for (const blocker of missionBoss.blockers) {
-                scene.remove(blocker.mesh);
+                removeMesh(blocker.mesh);
                 const roadblockIndex = roadblocks.indexOf(blocker);
                 if (roadblockIndex >= 0) roadblocks.splice(roadblockIndex, 1);
             }
@@ -3016,7 +2956,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     function destroyObstacle(obstacle, impact) {
         if (!obstacle.mesh || obstacle.destroyed) return;
         obstacle.destroyed = true;
-        scene.remove(obstacle.mesh);
+        removeMesh(obstacle.mesh);
         const index = world.obstacles.indexOf(obstacle);
         if (index >= 0) world.obstacles.splice(index, 1);
         const reward = obstacle.reward ?? Math.round(20 + impact * 5);
@@ -3077,6 +3017,10 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (debugClock.timer >= 0.5) {
             state.debug.fps = debugClock.frames / debugClock.timer;
             state.debug.entities = traffic.length + police.length + pickups.length + roadblocks.length + hazards.length + eventPickups.length;
+            state.debug.drawCalls = renderer.info.render.calls;
+            state.debug.triangles = renderer.info.render.triangles;
+            state.debug.geometries = renderer.info.memory.geometries;
+            state.debug.textures = renderer.info.memory.textures;
             debugClock.frames = 0;
             debugClock.timer = 0;
         }
@@ -3087,9 +3031,14 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.statusTimer = duration;
     }
 
+    function removeMesh(mesh) {
+        scene.remove(mesh);
+        disposeObject(mesh);
+    }
+
     function clearEntities(array) {
         for (let index = array.length - 1; index >= 0; index -= 1) {
-            scene.remove(array[index].mesh);
+            removeMesh(array[index].mesh);
         }
         array.length = 0;
     }
@@ -3193,7 +3142,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         if (isNearCraneCover(x, z)) return true;
         const district = getDistrictAt(x, z);
         if (district.id !== "downtown" && district.id !== "industrial") return false;
-        for (const building of world.buildings) {
+        for (const building of buildingsNear(world, x, z)) {
             if ((building.h ?? 0) < 12) continue;
             const edgeDx = Math.max(0, Math.abs(x - building.x) - building.hw);
             const edgeDz = Math.max(0, Math.abs(z - building.z) - building.hd);
@@ -3204,7 +3153,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     function isNearCraneCover(x, z) {
-        for (const obstacle of world.obstacles) {
+        for (const obstacle of obstaclesNear(world, x, z)) {
             if (obstacle.destroyed) continue;
             if (obstacle.type !== "crane" && obstacle.type !== "dockContainer") continue;
             if (distanceSq(x, z, obstacle.x, obstacle.z) < 7.2 * 7.2) return true;
