@@ -1,4 +1,6 @@
 import * as THREE from "three";
+import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { archetypeFor, archetypeId, sideContour, wheelLayout } from "./data/vehicles.js";
 
 export function createMaterial(color, options = {}) {
     return new THREE.MeshStandardMaterial({
@@ -93,49 +95,96 @@ function extrudeProfile(points, width, bevel = 0.05) {
     return geometry;
 }
 
-const ROOF_SHAPES = {
-    coupe: { from: -0.3, to: 0.12, height: 0.42, rake: 0.1 },
-    muscle: { from: -0.32, to: 0.08, height: 0.4, rake: 0.08 },
-    sport: { from: -0.22, to: 0.12, height: 0.3, rake: 0.14 },
-    van: { from: -0.44, to: 0.3, height: 0.66, rake: 0.03 },
-};
-
-function bodyGeometry(model) {
-    return cached(`body:${model.roof}:${model.length}:${model.width}:${model.height}`, () => {
-        const L = model.length;
-        const h = model.height;
-        const van = model.roof === "van";
-        return extrudeProfile(
-            [
-                [-L / 2, -h / 2],
-                [L / 2, -h / 2],
-                [L / 2, -h / 2 + h * 0.5],
-                [L * (van ? 0.42 : 0.3), h / 2],
-                [-L * (van ? 0.46 : 0.4), h / 2],
-                [-L / 2, h / 2 - h * 0.18],
-            ],
-            model.width
-        );
-    });
+function bodyGeometry(model, archetype) {
+    return cached(`body:${archetypeId(model)}:${model.length}:${model.width}:${model.height}`, () =>
+        extrudeProfile(sideContour(archetype, model.length, model.height), model.width)
+    );
 }
 
-function cabinGeometry(model) {
-    const roof = ROOF_SHAPES[model.roof] ?? ROOF_SHAPES.coupe;
-    return cached(`cabin:${model.roof}:${model.length}:${model.width}:${model.height}`, () => {
+function cabinGeometry(model, archetype) {
+    const { from, to, height, rake } = archetype.cabin;
+    return cached(`cabin:${archetypeId(model)}:${model.length}:${model.width}:${model.height}`, () => {
         const L = model.length;
         const base = model.height / 2;
-        const rake = roof.rake * L;
+        const slope = rake * L;
         return extrudeProfile(
             [
-                [roof.from * L, base],
-                [roof.to * L, base],
-                [roof.to * L - rake, base + roof.height],
-                [roof.from * L + rake * 0.8, base + roof.height],
+                [from * L, base],
+                [to * L, base],
+                [to * L - slope, base + height],
+                [from * L + slope * 0.8, base + height],
             ],
             model.width * 0.88,
             0.03
         );
     });
+}
+
+/** A box as non-indexed geometry (so it can be merged with extrusions), already moved into place. */
+function box(size, position) {
+    return new THREE.BoxGeometry(size.x, size.y, size.z).toNonIndexed().translate(position.x, position.y, position.z);
+}
+
+function mergeAll(list) {
+    if (!list.length) return null;
+    const merged = list.length === 1 ? list[0] : mergeGeometries(list, false);
+    if (list.length > 1) for (const g of list) g.dispose();
+    return merged;
+}
+
+/**
+ * Every static part of a model, merged per material group (paint, trim, dark, accent, lights).
+ * One cache entry per body shape and size; cars of the same model share the geometry.
+ */
+const staticCache = new Map();
+function staticGeometry(model, archetype) {
+    const key = `${archetype.id}:${model.length}:${model.width}:${model.height}`;
+    let entry = staticCache.get(key);
+    if (entry) return entry;
+    const L = model.length;
+    const W = model.width;
+    const H = model.height;
+    const cabin = archetype.cabin;
+    const roofLength = (cabin.to - cabin.from) * L - cabin.rake * L * 1.9;
+    const groups = { paint: [bodyGeometry(model, archetype)], trim: [], dark: [], accent: [], head: [], tail: [] };
+
+    groups.trim.push(
+        box(
+            { x: W * 0.84, y: 0.07, z: Math.max(0.4, roofLength) },
+            { x: 0, y: H / 2 + cabin.height + 0.02, z: ((cabin.from + cabin.to) / 2) * L - cabin.rake * L * 0.1 }
+        )
+    );
+    groups.dark.push(box({ x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: L / 2 }));
+    groups.dark.push(box({ x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: -L / 2 }));
+    for (const side of [-1, 1]) {
+        groups.paint.push(box({ x: 0.14, y: 0.1, z: 0.18 }, { x: side * (W * 0.5 + 0.08), y: H / 2 + 0.14, z: cabin.to * L - 0.1 }));
+        groups.head.push(box({ x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.02, z: L / 2 + 0.06 }));
+        groups.tail.push(box({ x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.06, z: -L / 2 - 0.05 }));
+    }
+
+    if (archetype.features.includes("spoiler")) {
+        groups.trim.push(box({ x: W * 0.94, y: 0.06, z: 0.38 }, { x: 0, y: H / 2 + 0.32, z: -L * 0.46 }));
+        for (const side of [-1, 1]) groups.trim.push(box({ x: 0.06, y: 0.28, z: 0.3 }, { x: side * W * 0.38, y: H / 2 + 0.16, z: -L * 0.46 }));
+    }
+    if (archetype.features.includes("hoodStripe")) {
+        groups.accent.push(box({ x: W * 0.36, y: 0.1, z: L * 0.22 }, { x: 0, y: H / 2 + 0.05, z: L * 0.2 }));
+    }
+
+    entry = { glass: cabinGeometry(model, archetype) };
+    for (const [name, list] of Object.entries(groups)) entry[name] = mergeAll(list);
+    for (const geometry of Object.values(entry)) if (geometry) geometry.userData.shared = true;
+    staticCache.set(key, entry);
+    return entry;
+}
+
+// Materials that do not change per car are shared instead of created again for every vehicle.
+const sharedPartMaterials = {};
+function sharedPart(key, build) {
+    if (!sharedPartMaterials[key]) {
+        sharedPartMaterials[key] = build();
+        sharedPartMaterials[key].userData.shared = true;
+    }
+    return sharedPartMaterials[key];
 }
 
 let rimMaterial = null;
@@ -156,72 +205,58 @@ export function createCar(model, sharedMaterials, options = {}) {
     const group = new THREE.Group();
     const chassis = new THREE.Group();
     group.add(chassis);
+    const archetype = archetypeFor(model);
+    const cabin = archetype.cabin;
     const bodyMat = createMaterial(options.bodyColor ?? model.color, { roughness: 0.24, metalness: 0.36 });
-    const trimMat = createMaterial(options.trimColor ?? model.trim, { roughness: 0.32, metalness: 0.42 });
-    const glassMat = sharedMaterials.glass;
-    const accentMat = createMaterial(options.police ? "#f5f7fb" : "#f7f1de", { roughness: 0.18, metalness: 0.45 });
-    const headlightMat = createMaterial("#fff6a8", { emissive: "#ffe56b", emissiveIntensity: 0.8 });
+    const trimColor = options.trimColor ?? model.trim;
+    const trimMat = sharedPart(`trim:${trimColor}`, () => createMaterial(trimColor, { roughness: 0.32, metalness: 0.42 }));
+    const accentMat = sharedPart(options.police ? "accent:police" : "accent:cream", () =>
+        createMaterial(options.police ? "#f5f7fb" : "#f7f1de", { roughness: 0.18, metalness: 0.45 })
+    );
+    const headlightMat = sharedPart("headlight", () => createMaterial("#fff6a8", { emissive: "#ffe56b", emissiveIntensity: 0.8 }));
     const tailMat = createMaterial("#ff394b", { emissive: "#ff394b", emissiveIntensity: 0.65 });
     const bumperMat = sharedMaterials.dark ?? trimMat;
     const L = model.length;
     const W = model.width;
     const H = model.height;
 
-    const body = new THREE.Mesh(bodyGeometry(model), bodyMat);
-    body.castShadow = true;
-    body.receiveShadow = true;
-    chassis.add(body);
-
-    const cabin = new THREE.Mesh(cabinGeometry(model), glassMat);
-    cabin.castShadow = true;
-    chassis.add(cabin);
-
-    const roofShape = ROOF_SHAPES[model.roof] ?? ROOF_SHAPES.coupe;
-    const roofLength = (roofShape.to - roofShape.from) * L - roofShape.rake * L * 1.9;
-    addBox(
-        chassis,
-        { x: W * 0.84, y: 0.07, z: Math.max(0.4, roofLength) },
-        { x: 0, y: H / 2 + roofShape.height + 0.02, z: ((roofShape.from + roofShape.to) / 2) * L - roofShape.rake * L * 0.1 },
-        trimMat
-    );
-
-    addBox(chassis, { x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: L / 2 }, bumperMat);
-    addBox(chassis, { x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: -L / 2 }, bumperMat);
-    for (const side of [-1, 1]) {
-        addBox(chassis, { x: 0.14, y: 0.1, z: 0.18 }, { x: side * (W * 0.5 + 0.08), y: H / 2 + 0.14, z: roofShape.to * L - 0.1 }, bodyMat, true, false);
-        addBox(chassis, { x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.02, z: L / 2 + 0.06 }, headlightMat, false, false);
-        addBox(chassis, { x: W * 0.26, y: 0.13, z: 0.1 }, { x: side * W * 0.3, y: 0.06, z: -L / 2 - 0.05 }, tailMat, false, false);
-    }
-
-    if (model.roof === "sport") {
-        addBox(chassis, { x: W * 0.94, y: 0.06, z: 0.38 }, { x: 0, y: H / 2 + 0.32, z: -L * 0.46 }, trimMat);
-        for (const side of [-1, 1]) addBox(chassis, { x: 0.06, y: 0.28, z: 0.3 }, { x: side * W * 0.38, y: H / 2 + 0.16, z: -L * 0.46 }, trimMat);
-    } else if (model.roof === "muscle") {
-        addBox(chassis, { x: W * 0.36, y: 0.1, z: L * 0.22 }, { x: 0, y: H / 2 + 0.05, z: L * 0.2 }, accentMat);
-    }
+    // Static parts: a handful of merged meshes instead of one mesh per box.
+    const fixed = staticGeometry(model, archetype);
+    const addMerged = (geometry, material, cast, receive) => {
+        if (!geometry) return;
+        const mesh = new THREE.Mesh(geometry, material);
+        mesh.castShadow = cast;
+        mesh.receiveShadow = receive;
+        chassis.add(mesh);
+    };
+    addMerged(fixed.paint, bodyMat, true, true);
+    addMerged(fixed.glass, sharedMaterials.glass, true, false);
+    addMerged(fixed.trim, trimMat, true, true);
+    addMerged(fixed.dark, bumperMat, true, true);
+    addMerged(fixed.accent, accentMat, true, true);
+    addMerged(fixed.head, headlightMat, false, false);
+    addMerged(fixed.tail, tailMat, false, false);
 
     // Wheels: pivot (steering) > spin (rolling) > tire + rim
     const { tire, rim, rimMat } = wheelParts();
     const wheels = [];
-    const wheelX = W * 0.55;
-    const wheelZ = L * 0.32;
-    for (const [sx, sz, front] of [[-1, 1, true], [1, 1, true], [-1, -1, false], [1, -1, false]]) {
+    for (const spot of wheelLayout(archetype, W, L)) {
         const pivot = new THREE.Group();
-        pivot.position.set(sx * wheelX, -0.22, sz * wheelZ);
+        pivot.position.set(spot.x, spot.y, spot.z);
         const spin = new THREE.Group();
         pivot.add(spin);
         spin.add(new THREE.Mesh(tire, sharedMaterials.tire));
         const rimMesh = new THREE.Mesh(rim, rimMat);
-        rimMesh.position.x = sx * 0.01;
+        rimMesh.position.x = spot.sx * 0.01;
         spin.add(rimMesh);
         group.add(pivot);
-        wheels.push({ pivot, spin, front });
+        wheels.push({ pivot, spin, front: spot.front });
     }
 
-    const parts = { bodyMat, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: 0.42, tune: null, tuneKey: null, siren: null, spot: null };
+    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: 0.42, tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
-        const barY = H / 2 + roofShape.height + 0.12;
+        const barY = H / 2 + cabin.height + 0.12;
         addBox(chassis, { x: W * 0.75, y: 0.12, z: 0.46 }, { x: 0, y: barY, z: 0 }, accentMat, false, false);
         const blue = createMaterial("#326dff", { emissive: "#326dff", emissiveIntensity: 0.9 });
         const red = createMaterial("#ff344c", { emissive: "#ff344c", emissiveIntensity: 0.9 });
@@ -231,7 +266,7 @@ export function createCar(model, sharedMaterials, options = {}) {
     }
 
     if (options.taxi) {
-        addBox(chassis, { x: W * 0.44, y: 0.18, z: 0.5 }, { x: 0, y: H / 2 + roofShape.height + 0.12, z: 0.05 }, createMaterial("#f7f1de", { emissive: "#ffc64d", emissiveIntensity: 0.35 }), false, false);
+        addBox(chassis, { x: W * 0.44, y: 0.18, z: 0.5 }, { x: 0, y: H / 2 + cabin.height + 0.12, z: 0.05 }, createMaterial("#f7f1de", { emissive: "#ffc64d", emissiveIntensity: 0.35 }), false, false);
     }
 
     if (options.headlightSpot) {

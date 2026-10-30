@@ -416,6 +416,49 @@ assert.equal(loadedOld.reputation.downtown, 0);
 storage.set("neon-pursuit-profile-v2", "{ this is not json");
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0, "a corrupt save falls back to a fresh profile");
 
+// --- Vehicle archetypes and the car builder -----------------------------------------------
+const { BODY_ARCHETYPES, archetypeFor, archetypeId, sideContour, wheelLayout } = await import("../src/data/vehicles.js");
+const THREE_LIB = await import("three");
+const canvasStub = { createLinearGradient: () => ({ addColorStop() {} }), fillRect() {}, fillStyle: "" };
+globalThis.document = { createElement: () => ({ width: 0, height: 0, getContext: () => canvasStub }) };
+const { createCar, createMaterial: makeMaterial } = await import("../src/vehicles.js");
+const builderMaterials = {
+    glass: new THREE_LIB.MeshStandardMaterial({ color: "#a9d9ff" }),
+    tire: new THREE_LIB.MeshStandardMaterial({ color: "#08090a" }),
+    dark: makeMaterial("#10151c"),
+};
+for (const [id, archetype] of Object.entries(BODY_ARCHETYPES)) {
+    assert.equal(archetype.id, id, `${id}: archetype id matches its key`);
+    assert.ok(archetype.cabin.from < archetype.cabin.to && archetype.cabin.height > 0, `${id}: cabin has a positive extent`);
+    assert.ok(archetype.profile.noseX > 0 && archetype.profile.noseX < 0.5 && archetype.profile.tailX > 0 && archetype.profile.tailX < 0.5, `${id}: hood and trunk stay inside the body`);
+    const contour = sideContour(archetype, 4, 0.7);
+    assert.ok(contour.length >= 4, `${id}: contour is a polygon`);
+    assert.ok(Math.min(...contour.map((point) => point[0])) === -2 && Math.max(...contour.map((point) => point[0])) === 2, `${id}: contour spans the car length`);
+    const layout = wheelLayout(archetype, 2, 4);
+    assert.equal(layout.filter((spot) => spot.front).length, 2, `${id}: two steered wheels`);
+    assert.ok(layout.every((spot) => Math.abs(spot.x) > 0 && Math.abs(spot.z) < 2), `${id}: wheels sit inside the body footprint`);
+}
+assert.equal(archetypeId({ roof: "van" }), "van", "the legacy roof field still selects the archetype");
+assert.equal(archetypeId({ body: "sport", roof: "van" }), "sport", "body wins over roof");
+assert.equal(archetypeId({ roof: "unknown" }), "coupe", "unknown shapes fall back to the default");
+assert.equal(archetypeFor(CAR_MODELS[3]).id, "van");
+
+for (const model of CAR_MODELS) {
+    const car = createCar(model, builderMaterials);
+    let meshCount = 0;
+    car.traverse((node) => { if (node.isMesh) meshCount += 1; });
+    assert.ok(meshCount <= 16, `${model.id}: static parts are merged (${meshCount} meshes)`);
+    assert.equal(car.userData.parts.wheels.length, 4, `${model.id}: four wheels`);
+    const again = createCar(model, builderMaterials);
+    const geometries = [];
+    car.traverse((node) => { if (node.isMesh) geometries.push(node.geometry); });
+    const shared = [];
+    again.traverse((node) => { if (node.isMesh && geometries.includes(node.geometry)) shared.push(node); });
+    assert.ok(shared.length >= 6, `${model.id}: cars of one model share their merged geometry`);
+    const police = createCar(model, builderMaterials, { police: true });
+    assert.ok(police.userData.parts.siren, `${model.id}: police cars get a light bar`);
+}
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 
