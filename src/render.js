@@ -211,7 +211,7 @@ export function createRenderPipeline({ renderer, scene, camera, sun }) {
         tmpTop.lerp(dayTop, (weatherMode === "clear" ? 0.45 : 0.15) * (1 - night));
         tmpTop.lerp(nightTop, 0.5 * night);
         skyUniforms.uTop.value.copy(tmpTop);
-        skyUniforms.uGlowAmount.value = 0.1 + 0.4 * night;
+        skyUniforms.uGlowAmount.value = 0.1 * night;
         skyUniforms.uGlow.value.copy(glowDay).lerp(glowNight, night);
 
         const base = GRADES[weatherMode === "storm" || weatherMode === "fog" ? "dusk" : "day"];
