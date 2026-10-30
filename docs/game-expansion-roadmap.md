@@ -38,6 +38,14 @@ Diese Roadmap ist die aktive Referenz fuer laufende Agenten-Sessions. Sie beschr
 - Klarere Minimap, Event-Telegrafie und Heat-Dramatik.
 - Staerkere visuelle und akustische Bezirksidentitaet.
 
+## Stand der Umsetzung
+- Welt: umgesetzt. Bezirke mit eigener Tonart, Lichtfarbe und Details (Neon, Rohre und Tanks, Baenke, Poller, Schiff), Seed-Karte, Tag/Nacht, Regen, Nebel, Gewitter.
+- Missionen: umgesetzt. Ketten, Bosse, Modifier, Fail-State, Strassenrennen. Offen: weitere Modi.
+- Polizei: umgesetzt. Strassennavigation, Sichtlinie, Rollen inklusive PIT und Zange, Spike-Vorwarnung. Offen: Taktiken an Bezirks-Hotspots.
+- Fahrzeuge: umgesetzt. Sichtbares Tuning, Lackfarben (teils ueber Ruf freigeschaltet), Handling-Charakter pro Auto.
+- Progression: umgesetzt. Bezirksruf mit fuenf Stufen, 40 Graffiti-Tags, Contracts mit Fortschritt ueber Runs, Achievements.
+- UI und Atmosphaere: umgesetzt. Minimap mit Formen statt nur Farben, Run-Zusammenfassung, Musik mit Heat-Ebenen und Bezirks-Tonart.
+
 ## Arbeitsweise
 - Immer nur den naechsten klar abgegrenzten Schritt implementieren.
 - Nach jedem Schritt Build, Test und kurzer Smoke-Check.
