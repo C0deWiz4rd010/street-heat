@@ -42,10 +42,55 @@ export const CONFIG = {
         followLerp: 3.6,
         fovBase: 56,
         fovMax: 68,
+        // Heat and nearby cops raise the camera so more of the chase stays visible.
+        zoomPerHeat: 0.9,
+        zoomPerCop: 0.5,
+        zoomMax: 5,
+        modes: {
+            near: { height: 20, backOffset: 8 },
+            normal: { height: 26, backOffset: 10 },
+            far: { height: 33, backOffset: 13 },
+        },
     },
     ui: {
         minimapRange: 74,
     },
+};
+
+export const VEHICLE_PHYSICS = {
+    engineSpeedPerLevel: 0.12,
+    accelPerLevel: 0.13,
+    turnPerGripLevel: 0.075,
+    brakeBase: 9.5,
+    brakePerLevel: 2.2,
+    coastBase: 2.4,
+    coastPerLevel: 0.4,
+    handbrakeBase: 16,
+    handbrakePerLevel: 2.4,
+    reverseAccelShare: 0.45,
+    gripBase: 0.76,
+    gripPerLevel: 0.038,
+    driftGripBase: 0.18,
+    driftGripPerLevel: 0.055,
+    lateralDecayRate: 60,
+    gripBlendTime: 0.075,
+    powerDriftSlip: 3.5,
+    powerDriftBuild: 2.8,
+    handbrakeDriftBuild: 4.5,
+    driftDecay: 2.8,
+    trailBrakeTurn: 0.35,
+    trailBrakeRearGrip: 0.06,
+    throttleDriftSlip: 0.2,
+    maxSubstep: 0.5,
+};
+
+// Ground profiles: grip scales lateral grip, rolling is extra drag (m/s^2), speed caps top speed and acceleration.
+export const SURFACES = {
+    road: { id: "road", grip: 1, rolling: 0, speed: 1 },
+    paving: { id: "paving", grip: 0.96, rolling: 0.2, speed: 0.98 },
+    gravel: { id: "gravel", grip: 0.84, rolling: 1.6, speed: 0.92 },
+    dock: { id: "dock", grip: 0.9, rolling: 0.6, speed: 0.95 },
+    grass: { id: "grass", grip: 0.72, rolling: 3.2, speed: 0.78 },
 };
 
 export const HEAT_TIERS = [
@@ -246,6 +291,8 @@ export const CAR_MODELS = [
         brakeFactor: 0.68,
         torquePeak: 0.45,
         gripBalance: 0,
+        weightTransfer: 1.0,
+        driftSlip: 1.0,
         enginePitchBase: 60,
     },
     {
@@ -267,6 +314,8 @@ export const CAR_MODELS = [
         brakeFactor: 0.52,
         torquePeak: 0.35,
         gripBalance: 0.3,
+        weightTransfer: 0.6,
+        driftSlip: 1.15,
         enginePitchBase: 48,
     },
     {
@@ -288,6 +337,8 @@ export const CAR_MODELS = [
         brakeFactor: 0.82,
         torquePeak: 0.55,
         gripBalance: -0.4,
+        weightTransfer: 1.35,
+        driftSlip: 0.8,
         enginePitchBase: 78,
     },
     {
@@ -309,6 +360,8 @@ export const CAR_MODELS = [
         brakeFactor: 0.44,
         torquePeak: 0.30,
         gripBalance: 0.5,
+        weightTransfer: 0.4,
+        driftSlip: 1.3,
         enginePitchBase: 42,
     },
 ];

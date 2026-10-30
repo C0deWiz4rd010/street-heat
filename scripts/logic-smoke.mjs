@@ -59,6 +59,73 @@ assert.equal(typeof state.mission.bonus.id, "string");
 assert.equal(state.mission.cashoutMultiplier, 1);
 assert.equal(state.mission.isBoss, false);
 
+// --- Vehicle physics: a headless test course per car ---------------------------------------
+const { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } = await import("../src/physics/vehicle.js");
+const { SURFACES } = await import("../src/config.js");
+
+function drive(model, ctl, seconds, start = {}, surface = SURFACES.road) {
+    const p = { x: 0, z: 0, rotation: 0, vx: 0, vz: 0, speed: 0, speedMag: 0, drift: 0, gripBlend: 0, ...start };
+    const spec = deriveSpec(model, { upgrades: {}, weatherGrip: 1, surface });
+    const dt = 1 / 60;
+    let peakDrift = 0;
+    for (let i = 0; i < seconds * 60; i += 1) {
+        const fx = Math.sin(p.rotation);
+        const fz = Math.cos(p.rotation);
+        let fwd = p.vx * fx + p.vz * fz;
+        let lat = p.vx * Math.cos(p.rotation) - p.vz * Math.sin(p.rotation);
+        const ratio = Math.min(1, Math.abs(fwd) / spec.maxSpeed);
+        fwd = applyEngine(fwd, ctl, spec, spec.maxSpeed, dt);
+        p.speed = fwd;
+        updateDrift(p, fwd, lat, ctl, spec, ratio, dt);
+        applySteering(p, fwd, ctl, spec, spec.maxSpeed, dt);
+        lat = applyGrip(lat, p, ctl, spec, dt);
+        const nfx = Math.sin(p.rotation);
+        const nfz = Math.cos(p.rotation);
+        p.vx = nfx * fwd + Math.cos(p.rotation) * lat;
+        p.vz = nfz * fwd - Math.sin(p.rotation) * lat;
+        p.speed = fwd;
+        p.speedMag = Math.hypot(p.vx, p.vz);
+        p.x += p.vx * dt;
+        p.z += p.vz * dt;
+        peakDrift = Math.max(peakDrift, p.drift);
+    }
+    return { p, spec, peakDrift };
+}
+
+for (const model of CAR_MODELS) {
+    const none = { forward: false, reverse: false, handbrake: false, turn: 0 };
+    const full = drive(model, { ...none, forward: true }, 8);
+    assert.ok(full.p.speed > model.maxSpeed * 0.8, `${model.id} should reach 80% top speed in 8 s (got ${full.p.speed.toFixed(1)})`);
+    assert.ok(full.p.speed <= full.spec.maxSpeed + 0.01, `${model.id} must not exceed its top speed`);
+
+    const braked = drive(model, { ...none, reverse: true }, 5, { vz: full.p.speed, speed: full.p.speed, speedMag: full.p.speed });
+    assert.ok(braked.p.speed < 0.5, `${model.id} should stop (or start reversing) within 5 s of braking, got ${braked.p.speed.toFixed(1)}`);
+
+    const turned = drive(model, { ...none, forward: true, turn: 1 }, 2, { vz: 10, speed: 10, speedMag: 10 });
+    assert.ok(turned.p.rotation > 0.3, `${model.id} should yaw left when steering left`);
+
+    const slide = drive(model, { ...none, forward: true, handbrake: true, turn: 1 }, 2, { vz: model.maxSpeed, speed: model.maxSpeed, speedMag: model.maxSpeed });
+    assert.ok(slide.peakDrift > 0.3, `${model.id} should drift with handbrake at speed`);
+}
+
+const needle = CAR_MODELS.find((car) => car.id === "needle");
+const mule = CAR_MODELS.find((car) => car.id === "mule");
+const noCtl = { forward: true, reverse: false, handbrake: false, turn: 0 };
+assert.ok(drive(needle, noCtl, 4).p.speed > drive(mule, noCtl, 4).p.speed, "needle must accelerate harder than mule");
+const grassRun = drive(CAR_MODELS[0], noCtl, 8, {}, SURFACES.grass);
+const roadRun = drive(CAR_MODELS[0], noCtl, 8);
+assert.ok(grassRun.p.speed < roadRun.p.speed * 0.85, "grass must slow the car down");
+
+const hit = { vx: 10, vz: 10, speed: 14, speedMag: 14 };
+applySpeedFactor(hit, 0.5);
+assert.equal(hit.vx, 5, "speed factor must scale velocity");
+assert.equal(hit.speedMag, 7);
+const edge = { vx: -4, vz: 6 };
+cancelNormalVelocity(edge, 1, 0);
+assert.deepEqual([edge.vx, edge.vz], [0, 6], "edge only removes the normal component");
+assert.equal(surfaceAt(0, 10, "park", false).id, "road");
+assert.equal(surfaceAt(13, 13, "park", false).id, "grass");
+
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);
 

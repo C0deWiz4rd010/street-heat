@@ -1,5 +1,6 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, UPGRADES, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, UPGRADES, VEHICLE_PHYSICS, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { applyEngine, applyGrip, applySpeedFactor, applySteering, cancelNormalVelocity, deriveSpec, surfaceAt, updateDrift } from "./physics/vehicle.js";
 import { clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud, showGameOver } from "./ui.js";
 import { createEffects, disposeObject, markShared } from "./effects.js";
@@ -56,6 +57,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     const tempTarget = new THREE.Vector3();
     const cameraBase = new THREE.Vector3();
     let cameraBaseReady = false;
+    let cameraZoom = 0;
     const debugClock = { frames: 0, timer: 0 };
     let scannerCharge = 0;
     let activeScannerZoneId = null;
@@ -235,6 +237,11 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             setStatus(`Grafik: ${post.getQualityConfig().label}`, 1.6);
         }
         if (input.consume("g")) toggleGarage();
+        if (input.consume("c")) {
+            const order = Object.keys(CONFIG.camera.modes);
+            state.cameraMode = order[(order.indexOf(state.cameraMode ?? "normal") + 1) % order.length];
+            setStatus(`Kamera: ${{ near: "Nah", normal: "Normal", far: "Weit" }[state.cameraMode]}`, 1.4);
+        }
         if (state.running && input.consume("p")) {
             state.paused = !state.paused;
             setStatus(state.paused ? "Pause." : "Zurueck auf der Strasse.", 1.4);
@@ -344,26 +351,22 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const player = state.player;
         const district = state.district ?? DISTRICTS[0];
         const inShortcut = district.id === "park" && isInsideShortcutZone(player.x, player.z);
-        const onRoad = isOnRoad(player.x, player.z);
-        const offRoadFactor = onRoad ? 1 : (district.offRoadFactor ?? 0.85);
-        const engineLevel = state.upgrades.engine;
+        const surface = surfaceAt(player.x, player.z, district.id, inShortcut);
         const gripLevel = state.upgrades.grip;
         const nitroLevel = state.upgrades.nitro;
         const armorLevel = state.upgrades.armor;
         const weatherGrip = WEATHER_MODES[state.weather.mode]?.grip ?? 1;
         const mass = model.mass ?? 1.0;
-        // Phase 6.5: per-stat scaling raised, max-level effectively 3 (lvl 4 still works but diminishing)
-        const engineMult = 1 + engineLevel * 0.12;
-        const gripMult = 1 + gripLevel * 0.075;
-        // Phase 6.5 Tier-Bonuses
-        const tierEngineNitroBoost = engineLevel >= 3 ? 0.05 : 0;
-        const tierGripBonus = gripLevel >= 3 ? 1 : 0; // used later for counter-steer score
-        const maxSpeed = model.maxSpeed * engineMult * offRoadFactor + (inShortcut ? district.shortcutBoost ?? 0 : 0);
-        const acceleration = (model.acceleration / Math.sqrt(mass)) * (1 + engineLevel * 0.13) * (0.92 + weatherGrip * 0.08) * offRoadFactor;
-        const turnPower = model.turn * gripMult * weatherGrip * (inShortcut ? 1.08 : 1);
-        const brakePower = (9.5 + gripLevel * 2.2) * (model.brakeFactor ?? 0.68) * weatherGrip;
-        const coastFriction = 2.4 + gripLevel * 0.4;
-        const reverseAccel = (model.acceleration * 0.45 / Math.sqrt(mass)) * (1 + engineLevel * 0.10);
+        const spec = deriveSpec(model, {
+            upgrades: state.upgrades,
+            weatherGrip,
+            surface,
+            inShortcut,
+            shortcutBoost: district.shortcutBoost ?? 0,
+            noBrake: Math.abs(state.modifiers?.noBrake ?? 0) > 0,
+        });
+        const maxSpeed = spec.maxSpeed;
+        player.surface = surface.id;
         const nitroMax = getNitroMax();
         const keys = input.keys;
         const forward = keys.w || keys.arrowup ? 1 : 0;
@@ -373,6 +376,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const handbrake = Boolean(keys[" "]);
         const turnInput = left - right;
         state.lastTurnInput = turnInput;
+        const ctl = { forward: forward === 1, reverse: reverse === 1, handbrake, turn: turnInput };
 
         // Forward/lateral axes from current rotation
         const fwdX = Math.sin(player.rotation);
@@ -389,7 +393,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const nitro = Boolean(keys.shift && player.nitro > 0 && Math.abs(fwdSpeed) > 2);
         player.nitroActive = nitro;
         player.braking = (reverse && fwdSpeed > 0.5) || handbrake;
-        const nitroBonusSpeed = nitro ? CONFIG.player.nitroBonus + nitroLevel * 2.4 + maxSpeed * tierEngineNitroBoost : 0;
+        const nitroBonusSpeed = nitro ? CONFIG.player.nitroBonus + nitroLevel * 2.4 + maxSpeed * spec.tierEngineNitroBoost : 0;
         const boostedMax = maxSpeed + nitroBonusSpeed;
 
         if (nitro) {
@@ -401,76 +405,18 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             player.nitro = Math.min(nitroMax, player.nitro + dt * (CONFIG.player.nitroRegen + nitroLevel * 0.9 + districtNitro + shortcutNitro));
         }
 
-        // Phase 2.1: torque-curve with mid-range gaussian peak (per car)
         const speedRatioFwd = Math.min(1, Math.abs(fwdSpeed) / Math.max(0.1, boostedMax));
-        const peakAt = model.torquePeak ?? 0.45;
-        const peakGauss = Math.exp(-Math.pow((speedRatioFwd - peakAt) / 0.32, 2));
-        const torqueFactor = Math.max(0.20, 1.25 * peakGauss + (1 - speedRatioFwd) * 0.35);
-
-        // Phase 2.2: separate coast / brake / reverse paths
-        if (Math.abs(state.modifiers?.noBrake ?? 0) > 0 && (reverse || forward === 0)) {
-            // noBrake mission modifier: only forward throttle and coast
-            if (forward) fwdSpeed += acceleration * torqueFactor * dt;
-            else fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), coastFriction * 0.4 * dt);
-        } else if (forward && !reverse) {
-            fwdSpeed += acceleration * torqueFactor * dt;
-        } else if (reverse && !forward) {
-            if (fwdSpeed > 0.3) {
-                // Active braking
-                fwdSpeed -= brakePower * dt;
-                if (fwdSpeed < 0) fwdSpeed = 0;
-            } else {
-                // Reverse throttle
-                fwdSpeed -= reverseAccel * torqueFactor * dt;
-            }
-        } else if (handbrake) {
-            // Handbrake: strong fwd friction
-            const handbrakeFriction = 16 + gripLevel * 2.4;
-            fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), handbrakeFriction * dt);
-        } else {
-            // Coast
-            fwdSpeed -= Math.sign(fwdSpeed) * Math.min(Math.abs(fwdSpeed), coastFriction * dt);
-        }
-        fwdSpeed = clamp(fwdSpeed, -boostedMax * CONFIG.player.reverseFactor, boostedMax);
-
-        // Phase 2.4: Power-drift + handbrake-drift; drift builds continuously
-        const driftSpeedThreshold = (model.driftThreshold ?? 0.38) * maxSpeed;
-        const sideSlip = Math.abs(latSpeed);
-        const handbrakeDrift = handbrake && Math.abs(fwdSpeed) > driftSpeedThreshold && Math.abs(turnInput) > 0;
-        const powerDrift = !handbrakeDrift && forward && Math.abs(turnInput) > 0 && speedRatioFwd > 0.55 && sideSlip > 3.5;
-        const isDrifting = handbrakeDrift || powerDrift;
-        const wasDrifting = player.drift > 0.5;
-        const driftBuildRate = handbrakeDrift ? 4.5 : powerDrift ? 2.8 : 0;
-        const driftDecayRate = 2.8;
-        player.drift = isDrifting
-            ? Math.min(1, player.drift + dt * driftBuildRate)
-            : Math.max(0, player.drift - dt * driftDecayRate);
-
-        // Phase 2.3: smoothstep turn scale instead of cliff-edge low-speed boost
-        if (Math.abs(fwdSpeed) > 0.12) {
-            const speedRatio = Math.abs(fwdSpeed) / Math.max(0.1, boostedMax);
-            const baseTurn = Math.pow(1 - speedRatio, 0.55) * 0.6 + 0.4;
-            const lowSpeedAgility = 1 + Math.max(0, 0.35 - speedRatio) * 1.2;
-            const balance = model.gripBalance ?? 0;
-            // negative balance (sport) = oversteer (more turn), positive = understeer
-            const balanceMult = 1 - balance * 0.18;
-            const driftBoost = isDrifting ? (1.55 + gripLevel * 0.04) : 1;
-            const turnScale = baseTurn * lowSpeedAgility * balanceMult;
-            player.rotation += turnInput * turnPower * driftBoost * turnScale * dt * Math.sign(fwdSpeed);
-        }
+        fwdSpeed = applyEngine(fwdSpeed, ctl, spec, boostedMax, dt);
+        player.speed = fwdSpeed;
+        const { isDrifting, wasDrifting } = updateDrift(player, fwdSpeed, latSpeed, ctl, spec, speedRatioFwd, dt);
+        applySteering(player, fwdSpeed, ctl, spec, boostedMax, dt);
 
         // Recalculate axes after rotation change
         const newFwdX = Math.sin(player.rotation);
         const newFwdZ = Math.cos(player.rotation);
         const newLatX = Math.cos(player.rotation);
         const newLatZ = -Math.sin(player.rotation);
-
-        // Lateral grip / drift friction (FPS-invariant exponential decay)
-        const baseGrip = (0.76 + gripLevel * 0.038) * weatherGrip;
-        const driftGrip = (0.18 + gripLevel * 0.055) * weatherGrip;
-        const lateralGrip = isDrifting ? driftGrip : baseGrip;
-        const lateralFrictionFactor = Math.exp(-(1 - Math.min(0.99, Math.max(0.01, lateralGrip))) * 60 * dt);
-        latSpeed *= lateralFrictionFactor;
+        latSpeed = applyGrip(latSpeed, player, ctl, spec, dt);
 
         // Reconstruct world-space velocity
         player.vx = newFwdX * fwdSpeed + newLatX * latSpeed;
@@ -486,7 +432,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             // Counter-steer: turning opposite to slide direction
             const slideDir = Math.sign(latSpeed);
             const counterSteer = slideDir !== 0 && Math.sign(turnInput) === -slideDir;
-            const counterMult = counterSteer ? 1.25 + tierGripBonus * 0.25 : 1;
+            const counterMult = counterSteer ? 1.25 + spec.tierGripBonus * 0.25 : 1;
             const driftGain = Math.abs(fwdSpeed) * dt * (0.8 + gripLevel * 0.08) * angleScale * counterMult;
             state.combo.driftBank += driftGain;
             state.combo.driftScore += driftGain * 10;
@@ -514,25 +460,52 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             spawnDriftSmoke(rearX - newLatX * 0.85, rearZ - newLatZ * 0.85);
         }
 
-        // Position update using velocity vector
-        const next = {
-            x: clamp(player.x + player.vx * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
-            z: clamp(player.z + player.vz * dt, -CONFIG.map.size / 2, CONFIG.map.size / 2),
-        };
-
-        // Save pre-pushout position to derive collision normal for wall sliding
-        const preX = next.x;
-        const preZ = next.z;
-        const hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
+        // Position update: sub-stepped so a fast car cannot tunnel through a building.
+        const half = CONFIG.map.size / 2;
+        const travel = Math.hypot(player.vx, player.vz) * dt;
+        const substeps = Math.max(1, Math.ceil(travel / VEHICLE_PHYSICS.maxSubstep));
+        const next = { x: player.x, z: player.z };
+        let preX = next.x;
+        let preZ = next.z;
+        let hitBuilding = false;
+        let edgeX = 0;
+        let edgeZ = 0;
+        for (let step = 0; step < substeps && !hitBuilding; step += 1) {
+            next.x += (player.vx * dt) / substeps;
+            next.z += (player.vz * dt) / substeps;
+            if (next.x < -half || next.x > half) {
+                edgeX = next.x < 0 ? 1 : -1;
+                next.x = clamp(next.x, -half, half);
+            }
+            if (next.z < -half || next.z > half) {
+                edgeZ = next.z < 0 ? 1 : -1;
+                next.z = clamp(next.z, -half, half);
+            }
+            // Save pre-pushout position to derive the collision normal for wall sliding
+            preX = next.x;
+            preZ = next.z;
+            hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
+        }
+        // The map edge removes only the velocity component pointing out of the map.
+        if (edgeX) cancelNormalVelocity(player, edgeX, 0);
+        if (edgeZ) cancelNormalVelocity(player, 0, edgeZ);
+        if (edgeX || edgeZ) {
+            player.speed = newFwdX * player.vx + newFwdZ * player.vz;
+            player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
+        }
 
         const hitObstacle = obstacleAt(world, next.x, next.z, CONFIG.player.radius);
         let destroyedReaction = null;
         if (hitObstacle) {
             const dx = next.x - hitObstacle.x;
             const dz = next.z - hitObstacle.z;
-            const distance = Math.sqrt(dx * dx + dz * dz) || 1;
-            next.x += (dx / distance) * 1.2;
-            next.z += (dz / distance) * 1.2;
+            const distance = Math.sqrt(dx * dx + dz * dz);
+            // Push out by the actual overlap along the contact normal (fallback: straight back).
+            const overlap = hitObstacle.radius + CONFIG.player.radius - distance + 0.05;
+            const pushX = distance > 0.001 ? dx / distance : -newFwdX;
+            const pushZ = distance > 0.001 ? dz / distance : -newFwdZ;
+            next.x += pushX * overlap;
+            next.z += pushZ * overlap;
             const impactMag = player.speedMag;
             if (hitObstacle.destructible && impactMag > (hitObstacle.minImpact ?? 6)) {
                 destroyedReaction = destroyObstacle(hitObstacle, impactMag);
@@ -1289,7 +1262,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (distanceSq(state.player.x, state.player.z, block.x, block.z) < (block.radius + CONFIG.player.radius) ** 2 && block.cooldown <= 0) {
                 block.cooldown = 1.4;
                 damagePlayer(6 + Math.abs(state.player.speed) * 0.38, "hazard");
-                state.player.speed *= 0.32;
+                applySpeedFactor(state.player, 0.32);
                 state.cameraShake = Math.max(state.cameraShake, 0.55);
                 state.stats.roadblocks += 1;
                 audio?.crash();
@@ -1322,7 +1295,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
                 if (hazard.type === "debris") {
                     damagePlayer((hazard.damage ?? 2.2) + Math.abs(state.player.speed) * 0.1, "hazard");
-                    state.player.speed *= hazard.slowdown ?? 0.62;
+                    applySpeedFactor(state.player, hazard.slowdown ?? 0.62);
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#d9a06a", 10);
                     setStatus(hazard.message ?? "Truemmerfeld bremst dich aus.", 1.2);
                     if (hazard.consumeOnHit !== false) {
@@ -1331,19 +1304,19 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
                     }
                 } else if (hazard.type === "fallenLamp") {
                     damagePlayer(3.5 + Math.abs(state.player.speed) * 0.16, "hazard");
-                    state.player.speed *= hazard.slowdown ?? 0.52;
+                    applySpeedFactor(state.player, hazard.slowdown ?? 0.52);
                     state.cameraShake = Math.max(state.cameraShake, 0.22);
                     spawnParticle(hazard.x, hazard.z, hazard.color ?? "#ffe08a", 12);
                     setStatus("Gefallene Laterne blockiert die Spur.", 1.4);
                 } else if (hazard.type === "closureBarrier") {
                     damagePlayer(4 + Math.abs(state.player.speed) * 0.2, "hazard");
-                    state.player.speed *= 0.32;
+                    applySpeedFactor(state.player, 0.32);
                     state.cameraShake = Math.max(state.cameraShake, 0.28);
                     spawnParticle(hazard.x, hazard.z, "#ff9c45", 14);
                     setStatus("Sperrung blockiert die Route.", 1.4);
                 } else {
                     damagePlayer(5 + Math.abs(state.player.speed) * 0.28, "hazard");
-                    state.player.speed *= 0.35;
+                    applySpeedFactor(state.player, 0.35);
                     state.player.nitro = Math.max(0, state.player.nitro - 22);
                     spawnParticle(hazard.x, hazard.z, "#f7fbff", 18);
                     setStatus("Spike-Strip erwischt. Reifen verlieren Grip.", 1.8);
@@ -1611,17 +1584,26 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const leanX = latX * latSpeed * 0.06;
         const leanZ = latZ * latSpeed * 0.06;
 
+        // Heat and cops close by raise the camera so more of the chase stays visible.
+        const cameraMode = CONFIG.camera.modes[state.cameraMode] ?? CONFIG.camera.modes.normal;
+        let copsNear = 0;
+        for (const agent of police) {
+            if (distanceSq(player.x, player.z, agent.x, agent.z) < 30 * 30) copsNear += 1;
+        }
+        const zoomTarget = Math.min(CONFIG.camera.zoomMax, state.wanted.level * CONFIG.camera.zoomPerHeat + copsNear * CONFIG.camera.zoomPerCop);
+        cameraZoom += (zoomTarget - cameraZoom) * (1 - Math.exp(-1.5 * dt));
+
         const speedLift = Math.min(3.5, speedMag * speedMag * 0.0055);
         tempTarget.set(
-            player.x - forwardX * CONFIG.camera.backOffset + leanX,
-            CONFIG.camera.height + speedLift,
-            player.z - forwardZ * CONFIG.camera.backOffset + leanZ
+            player.x - forwardX * (cameraMode.backOffset + cameraZoom * 0.4) + leanX,
+            cameraMode.height + cameraZoom + speedLift,
+            player.z - forwardZ * (cameraMode.backOffset + cameraZoom * 0.4) + leanZ
         );
 
         // Phase 4: adaptive position-lerp (FPS-invariant)
         const turnInputMag = Math.abs((state.lastTurnInput ?? 0));
         const driftFactor = Math.min(1, (player.drift ?? 0));
-        const kPos = 4.0 + speedRatio * 3.5 + driftFactor * 1.2 + turnInputMag * 0.8;
+        const kPos = CONFIG.camera.followLerp + speedRatio * 3.5 + driftFactor * 1.2 + turnInputMag * 0.8;
         // The smoothed base position never receives the shake offset, so shake cannot feed back into the lerp.
         if (!cameraBaseReady) {
             cameraBase.copy(camera.position);
@@ -2357,16 +2339,6 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
     }
 
     // Phase 6.4: off-road detection — Park grass slows car down
-    function isOnRoad(x, z) {
-        const district = getDistrictAt(x, z);
-        if (district.id !== "park" || !district.offRoadPenalty) return true;
-        if (isInsideShortcutZone(x, z)) return true;
-        // Streets in this game: ±8 from origin lines define road grid (rough approximation)
-        const onCrossX = Math.abs(x % 26) < 5.5;
-        const onCrossZ = Math.abs(z % 26) < 5.5;
-        return onCrossX || onCrossZ;
-    }
-
     function getNextUpgrade() {
         let best = null;
         for (const id of Object.keys(UPGRADES)) {
