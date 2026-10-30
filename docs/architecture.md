@@ -42,7 +42,7 @@ Diese Module kennen weder DOM noch Three.js und laufen in `npm test` headless:
 | `bindings.js`, `gamepad.js` | Tasten-Mapping, Gamepad-Lesen, Rumble-Stärke |
 | `music.js`, `siren.js` | Notendaten, Ebenen je Heat, Sirenen-Muster (Synthese in `audio.js`/`siren.js`) |
 | `onboarding.js`, `settings.js` | Tutorial-Schritte, Einstellungen mit Validierung |
-| `data/vehicles.js`, `vehicleParts.js` | Karosserie-Archetypen (Kontur, Kabine, Radlayout), Teile-Bibliothek (Spoiler, Racks, Lichtbalken, Rammschutz ...), Lichtstile, Felgenstile |
+| `data/vehicles.js`, `vehicleParts.js` | Karosserie-Archetypen (Kontur, Kabine, Radlayout, auch Zweirad), Zivilflotte pro Bezirk (`CIVILIAN_TYPES`, `DISTRICT_FLEETS`, `PALETTES`, `pickCivilian`), Teile-Bibliothek (Spoiler, Racks, Lichtbalken, Beds, Dachextras ...), Lichtstile, Felgenstile |
 | `util/math.js` | `clamp`, `wrapAngle`, `turnToward`, Achsen-Helfer |
 
 ## Muster für ausgelagerte Systeme

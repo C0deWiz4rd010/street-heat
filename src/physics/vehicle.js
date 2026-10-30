@@ -110,6 +110,11 @@ export function applyGrip(lat, p, ctl, spec, dt) {
     return lat * Math.exp(-(1 - clamp(grip, 0.01, 0.99)) * P.lateralDecayRate * dt);
 }
 
+/** Collision radius of a vehicle from its footprint (the same formula traffic has always used). */
+export function vehicleRadius(model) {
+    return ((model.length ?? 4.2) * 0.42 + (model.width ?? 2) * 0.5) * 0.5;
+}
+
 /** Scales every velocity component, so hazards really slow the car (speed is derived from velocity). */
 export function applySpeedFactor(p, factor) {
     p.vx *= factor;

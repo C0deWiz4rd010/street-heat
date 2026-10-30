@@ -1,5 +1,7 @@
 import { CAR_MODELS, CONFIG, DISTRICTS } from "../config.js";
 import { distanceSq, wrapAngle, axisVelocity, axisYaw } from "../util/math.js";
+import { pickCivilian } from "../data/vehicles.js";
+import { vehicleRadius } from "../physics/vehicle.js";
 import { createCar } from "../vehicles.js";
 import { pushOutBuildings } from "../world.js";
 
@@ -131,9 +133,11 @@ export function createTrafficSystem({
             }
 
             const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
+            // Contact distance follows the footprint: a scooter is hit later than a bus (0.91 keeps the old feel for cars).
+            const hitDist = (car.radius + CONFIG.player.radius) * 0.91;
 
             // Near-miss
-            if (distToPlayer > CONFIG.traffic.collisionRadius && distToPlayer < CONFIG.traffic.collisionRadius + 2.8 && playerSpeedMag > 8) {
+            if (distToPlayer > hitDist && distToPlayer < hitDist + 2.8 && playerSpeedMag > 8) {
                 if (car.nearMissCooldown <= 0) {
                     car.nearMissCooldown = 2.2;
                     triggerNearMiss();
@@ -141,7 +145,7 @@ export function createTrafficSystem({
             }
 
             // Player ↔ Traffic: impulse-based momentum exchange
-            if (distToPlayer < CONFIG.traffic.collisionRadius && car.cooldown <= 0) {
+            if (distToPlayer < hitDist && car.cooldown <= 0) {
                 car.cooldown = 0.75;
                 const trafficMass = car.model?.mass ?? 1.0;
 
@@ -179,7 +183,7 @@ export function createTrafficSystem({
                     car.speed *= 0.72;
 
                     // Separation push
-                    const overlap = CONFIG.traffic.collisionRadius - distToPlayer;
+                    const overlap = hitDist - distToPlayer;
                     const totalMass = playerMass + trafficMass;
                     state.player.x += nx * overlap * (trafficMass / totalMass);
                     state.player.z += nz * overlap * (trafficMass / totalMass);
@@ -213,8 +217,8 @@ export function createTrafficSystem({
 
     function spawn() {
         const district = chooseTrafficDistrict();
-        const model = createTrafficModelForDistrict(district);
-        const mesh = createCar(model, sharedMaterials, { taxi: model.name === "Taxi" });
+        const model = pickCivilian(district.id);
+        const mesh = createCar(model, sharedMaterials);
         const axis = Math.random() < 0.5 ? "x" : "z";
         const streetOptions = getDistrictTrafficStreets(axis, district);
         const street = streetOptions[Math.floor(Math.random() * streetOptions.length)];
@@ -228,7 +232,7 @@ export function createTrafficSystem({
         scene.add(mesh);
         const baseSpeed = district.id === "park" ? 3.1 : district.id === "harbor" ? 3.8 : district.id === "industrial" ? 4.2 : 5.1;
         const naturalSpeed = baseSpeed + Math.random() * 3.2;
-        const carRadius = ((model.length ?? 4.2) * 0.42 + (model.width ?? 2.0) * 0.5) * 0.5;
+        const carRadius = vehicleRadius(model);
         traffic.push({ mesh, x, z, axis, direction, speed: naturalSpeed, naturalSpeed, pushVx: 0, pushVz: 0, radius: carRadius, model, cooldown: 0, nearMissCooldown: 0, districtId: district.id, headlights });
     }
 
@@ -240,26 +244,6 @@ export function createTrafficSystem({
             if (roll <= 0) return district;
         }
         return DISTRICTS[DISTRICTS.length - 1];
-    }
-
-    function createTrafficModelForDistrict(district) {
-        if (district.id === "downtown") {
-            if (Math.random() < 0.38) return { ...CAR_MODELS[1], name: "Taxi", color: "#ffc23e", trim: "#181511" };
-            return Math.random() < 0.5 ? CAR_MODELS[0] : CAR_MODELS[2];
-        }
-        if (district.id === "industrial") {
-            return Math.random() < 0.65
-                ? { ...CAR_MODELS[3], name: "Service Van", color: "#d39157", trim: "#2a2219" }
-                : { ...CAR_MODELS[1], name: "Yard Hauler", color: "#c4b09a", trim: "#29251e" };
-        }
-        if (district.id === "harbor") {
-            return Math.random() < 0.5
-                ? { ...CAR_MODELS[3], color: "#6f8ea5", trim: "#1a2128", name: "Dock Truck", width: 2.34, length: 5.1 }
-                : { ...CAR_MODELS[0], color: "#4d6e84", trim: "#162129", name: "Harbor Shuttle" };
-        }
-        return Math.random() < 0.7
-            ? { ...CAR_MODELS[0], color: "#7dcf82", trim: "#1d2a1e", name: "Park Service" }
-            : { ...CAR_MODELS[2], color: "#b8e2ff", trim: "#11354a", name: "Cycle Lane" };
     }
 
     function getDistrictTrafficStreets(axis, district) {

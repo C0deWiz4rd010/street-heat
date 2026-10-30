@@ -11,6 +11,11 @@ export function box(size, position) {
     return new THREE.BoxGeometry(size.x, size.y, size.z).toNonIndexed().translate(position.x, position.y, position.z);
 }
 
+/** A box tilted around the x axis (dump beds, tow booms), as non-indexed geometry. */
+export function tiltedBox(size, position, tiltX) {
+    return new THREE.BoxGeometry(size.x, size.y, size.z).toNonIndexed().rotateX(tiltX).translate(position.x, position.y, position.z);
+}
+
 /** A cylinder (vertical by default) as non-indexed geometry. */
 export function cylinder(radius, height, position, segments = 10, tilt = { x: 0, z: 0 }) {
     const geometry = new THREE.CylinderGeometry(radius, radius, height, segments).toNonIndexed();
@@ -34,7 +39,7 @@ export function partContext(model, archetype) {
 }
 
 /** Body features. Each returns { group: [geometry, ...] }. */
-export const PARTS = {
+const BODY_PARTS = {
     spoiler({ L, W, H }) {
         return {
             trim: [
@@ -96,6 +101,66 @@ export const PARTS = {
     },
 };
 
+/** Parts of work and city vehicles: beds, cargo boxes, flair on the roof. */
+const CIVILIAN_PARTS = {
+    pickupBed({ L, W, H, cabin }) {
+        const front = cabin.from * L;
+        const length = front + L / 2;
+        const wallY = H / 2 + 0.15;
+        return {
+            paint: [
+                ...both.map((side) => box({ x: 0.08, y: 0.32, z: length }, { x: side * (W / 2 - 0.04), y: wallY, z: front - length / 2 })),
+                box({ x: W * 0.94, y: 0.32, z: 0.08 }, { x: 0, y: wallY, z: -L / 2 + 0.04 }),
+                box({ x: W * 0.94, y: 0.4, z: 0.08 }, { x: 0, y: wallY + 0.04, z: front - 0.04 }),
+            ],
+            dark: [box({ x: W * 0.84, y: 0.03, z: length * 0.94 }, { x: 0, y: H / 2 + 0.02, z: front - length / 2 })],
+        };
+    },
+    cargoBox({ L, W, H }) {
+        const height = H * 1.15;
+        return {
+            paint: [box({ x: W * 0.98, y: height, z: L * 0.56 }, { x: 0, y: H / 2 + height / 2, z: -L * 0.22 })],
+            accent: [box({ x: W * 0.99, y: 0.12, z: L * 0.56 }, { x: 0, y: H / 2 + height * 0.55, z: -L * 0.22 })],
+        };
+    },
+    dumpBed({ L, W, H }) {
+        return { paint: [tiltedBox({ x: W * 0.96, y: 0.85, z: L * 0.5 }, { x: 0, y: H / 2 + 0.5, z: -L * 0.22 }, -0.1)] };
+    },
+    rider({ L, H }) {
+        return {
+            dark: [box({ x: 0.36, y: 0.5, z: 0.26 }, { x: 0, y: H / 2 + 0.4, z: -L * 0.05 })],
+            accent: [box({ x: 0.28, y: 0.28, z: 0.28 }, { x: 0, y: H / 2 + 0.82, z: -L * 0.04 })],
+        };
+    },
+    taxiSign({ W, roofZ, roofY }) {
+        return { head: [box({ x: W * 0.36, y: 0.14, z: 0.4 }, { x: 0, y: roofY + 0.12, z: roofZ })] };
+    },
+    iceCreamCone({ roofZ, roofY }) {
+        return {
+            accent: [
+                new THREE.ConeGeometry(0.3, 0.7, 8).toNonIndexed().translate(0, roofY + 0.45, roofZ),
+                new THREE.SphereGeometry(0.26, 8, 6).toNonIndexed().translate(0, roofY + 0.95, roofZ),
+            ],
+        };
+    },
+    towBoom({ L, H }) {
+        return { dark: [tiltedBox({ x: 0.2, y: 0.2, z: L * 0.42 }, { x: 0, y: H / 2 + 0.5, z: -L * 0.2 }, 0.45)], head: [box({ x: 0.3, y: 0.1, z: 0.3 }, { x: 0, y: H / 2 + 0.95, z: -L * 0.36 })] };
+    },
+    newsDish({ roofZ, roofY }) {
+        return {
+            dark: [cylinder(0.04, 0.5, { x: 0, y: roofY + 0.28, z: roofZ }, 6)],
+            trim: [cylinder(0.45, 0.06, { x: 0, y: roofY + 0.55, z: roofZ }, 12, { x: 0.5, z: 0 })],
+        };
+    },
+    surfboard({ L, roofZ, roofY }) {
+        return { accent: [box({ x: 0.34, y: 0.04, z: L * 0.72 }, { x: 0, y: roofY + 0.14, z: roofZ })] };
+    },
+    roofBox({ W, roofLength, roofZ, roofY }) {
+        return { dark: [box({ x: W * 0.6, y: 0.22, z: roofLength * 0.7 }, { x: 0, y: roofY + 0.17, z: roofZ })] };
+    },
+};
+
+export const PARTS = { ...BODY_PARTS, ...CIVILIAN_PARTS };
 export const PART_NAMES = Object.keys(PARTS);
 
 /** Head- and tail-light layouts. `default` is the original look of the first four cars. */

@@ -435,8 +435,9 @@ for (const [id, archetype] of Object.entries(BODY_ARCHETYPES)) {
     assert.ok(contour.length >= 4, `${id}: contour is a polygon`);
     assert.ok(Math.min(...contour.map((point) => point[0])) === -2 && Math.max(...contour.map((point) => point[0])) === 2, `${id}: contour spans the car length`);
     const layout = wheelLayout(archetype, 2, 4);
-    assert.equal(layout.filter((spot) => spot.front).length, 2, `${id}: two steered wheels`);
-    assert.ok(layout.every((spot) => Math.abs(spot.x) > 0 && Math.abs(spot.z) < 2), `${id}: wheels sit inside the body footprint`);
+    const bike = archetype.wheels.layout === "bike";
+    assert.equal(layout.filter((spot) => spot.front).length, bike ? 1 : 2, `${id}: steered wheels`);
+    assert.ok(layout.every((spot) => (bike || Math.abs(spot.x) > 0) && Math.abs(spot.z) < 2), `${id}: wheels sit inside the body footprint`);
 }
 assert.equal(archetypeId({ roof: "van" }), "van", "the legacy roof field still selects the archetype");
 assert.equal(archetypeId({ body: "sport", roof: "van" }), "sport", "body wins over roof");
@@ -498,6 +499,66 @@ for (const override of SHOWCASE_OVERRIDES) {
     showcaseSeen.add(model.name);
 }
 assert.equal(showcaseSeen.size, SHOWCASE_OVERRIDES.length, "showcase models have unique names");
+
+// --- Civilian fleet: types, palettes, district weights, footprint radius ---------------------
+const fleet = await import("../src/data/vehicles.js");
+const { vehicleRadius } = await import("../src/physics/vehicle.js");
+const cityDistricts = DISTRICTS.map((district) => district.id);
+assert.deepEqual(Object.keys(fleet.DISTRICT_FLEETS).sort(), [...cityDistricts].sort(), "every district has a fleet");
+for (const [id, type] of Object.entries(fleet.CIVILIAN_TYPES)) {
+    assert.ok(fleet.BODY_ARCHETYPES[type.body], `${id}: body archetype ${type.body} exists`);
+    assert.ok(type.width <= 2.3, `${id}: at most 2.3 m wide (streets are 5.4 m)`);
+    assert.ok(type.length >= 1.5 && type.length <= 7.6, `${id}: sensible length`);
+    assert.ok(type.mass > 0, `${id}: has a mass`);
+    for (const feature of type.features ?? []) assert.ok(parts.PART_NAMES.includes(feature), `${id}: unknown feature ${feature}`);
+    for (const accessory of type.accessories ?? []) assert.ok(parts.PART_NAMES.includes(accessory), `${id}: unknown accessory ${accessory}`);
+    for (const style of type.lights ?? []) assert.ok(parts.LIGHT_STYLE_NAMES.includes(style), `${id}: unknown light style`);
+    for (const style of type.wheelStyles ?? []) assert.ok(parts.RIM_STYLE_NAMES.includes(style), `${id}: unknown wheel style`);
+    if (type.palette) assert.ok(fleet.PALETTES[type.palette], `${id}: palette ${type.palette} exists`);
+}
+for (const [districtId, entries] of Object.entries(fleet.DISTRICT_FLEETS)) {
+    assert.ok(entries.length >= 5, `${districtId}: a varied fleet`);
+    assert.ok(entries.every(([type, weight]) => fleet.CIVILIAN_TYPES[type] && weight > 0), `${districtId}: known types, positive weights`);
+    assert.ok(fleet.PALETTES[districtId].length >= 4, `${districtId}: a palette with real choice`);
+}
+let rngSeed = 11;
+const seeded = () => {
+    rngSeed = (rngSeed * 16807) % 2147483647;
+    return rngSeed / 2147483647;
+};
+const seenTypes = new Set();
+for (const districtId of cityDistricts) {
+    for (let i = 0; i < 400; i += 1) {
+        const model = fleet.pickCivilian(districtId, seeded);
+        seenTypes.add(`${districtId}:${model.type}`);
+        assert.ok(/^#[0-9a-f]{6}$/.test(model.color) && /^#[0-9a-f]{6}$/.test(model.trim), "colours are valid hex");
+        assert.ok(fleet.BODY_ARCHETYPES[model.body] && model.width <= 2.3, "picked models are buildable");
+    }
+}
+for (const [districtId, entries] of Object.entries(fleet.DISTRICT_FLEETS)) {
+    for (const [type] of entries) assert.ok(seenTypes.has(`${districtId}:${type}`), `${districtId}: ${type} actually spawns`);
+}
+assert.equal(fleet.pickCivilian("downtown", () => 0).type, "taxi", "the first weighted entry is picked at roll 0");
+assert.equal(fleet.shadeColor("#808080", 1), "#808080");
+assert.equal(fleet.shadeColor("#ffffff", 2), "#ffffff", "shading clamps at white");
+assert.ok(fleet.shadeColor("#808080", 0.5) < "#808080", "shading darkens");
+
+const sedan = fleet.buildCivilian("sedan", "downtown", () => 0.5);
+const bus = fleet.buildCivilian("bus", "downtown", () => 0.5);
+const scooter = fleet.buildCivilian("scooter", "downtown", () => 0.5);
+assert.ok(vehicleRadius(scooter) < vehicleRadius(sedan) && vehicleRadius(sedan) < vehicleRadius(bus), "bigger footprint, bigger hitbox");
+assert.ok(Math.abs(vehicleRadius(CAR_MODELS[0]) - 1.382) < 0.001, "the Comet keeps the radius traffic always used");
+assert.equal(wheelLayout(fleet.BODY_ARCHETYPES.scooter, 0.8, 1.9).length, 2, "a scooter has two wheels");
+assert.ok(wheelLayout(fleet.BODY_ARCHETYPES.scooter, 0.8, 1.9).every((spot) => spot.x === 0 && spot.scale < 1), "on the centre line, smaller");
+
+for (const typeId of Object.keys(fleet.CIVILIAN_TYPES)) {
+    const model = fleet.buildCivilian(typeId, "harbor", seeded);
+    const car = createCar(model, builderMaterials);
+    let meshCount = 0;
+    car.traverse((node) => { if (node.isMesh) meshCount += 1; });
+    assert.ok(meshCount <= 18, `${typeId}: merged (${meshCount} meshes)`);
+    assert.equal(car.userData.parts.wheels.length, typeId === "scooter" ? 2 : 4, `${typeId}: wheel count`);
+}
 
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);

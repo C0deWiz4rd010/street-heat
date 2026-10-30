@@ -1,6 +1,6 @@
 import * as THREE from "three";
 import { CAR_MODELS } from "./config.js";
-import { SHOWCASE_OVERRIDES } from "./data/vehicles.js";
+import { CIVILIAN_TYPES, SHOWCASE_OVERRIDES, buildCivilian } from "./data/vehicles.js";
 import { createCar, setHeadlightBeamLevel, updateCarVisuals } from "./vehicles.js";
 
 /**
@@ -27,12 +27,22 @@ export function createGallery({ renderer, sharedMaterials }) {
         },
     ];
 
+    // Civilian traffic: every type once, dressed for Downtown (types with their own palette keep it).
+    let seed = 7;
+    const rng = () => {
+        seed = (seed * 16807) % 2147483647;
+        return seed / 2147483647;
+    };
+    const civilians = Object.keys(CIVILIAN_TYPES).map((typeId) => ({ model: buildCivilian(typeId, "downtown", rng), options: {} }));
+    rows.push({ label: "Zivil", models: civilians.slice(0, 8) });
+    rows.push({ label: "Zivil", models: civilians.slice(8) });
+
     const cars = [];
     const labels = [];
     rows.forEach((row, rowIndex) => {
         row.models.forEach(({ model, options }, index) => {
             const car = createCar(model, sharedMaterials, options);
-            car.position.set((index - (row.models.length - 1) / 2) * 6.5, 0.38, rowIndex * 9);
+            car.position.set((index - (row.models.length - 1) / 2) * 8, 0.38, rowIndex * 9);
             scene.add(car);
             cars.push(car);
             labels.push(`${row.label}: ${model.name}`);
@@ -45,7 +55,7 @@ export function createGallery({ renderer, sharedMaterials }) {
     document.body.appendChild(overlay);
 
     const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.3, 400);
-    const view = { yaw: 0.6, pitch: 0.55, distance: 30, targetZ: 9 };
+    const view = { yaw: 0.6, pitch: 0.55, distance: 42, targetZ: 18 };
     let spin = true;
     let night = false;
     let dragging = false;

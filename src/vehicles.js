@@ -231,20 +231,22 @@ export function createCar(model, sharedMaterials, options = {}) {
     // Wheels: pivot (steering) > spin (rolling) > tire + rim
     const { tire, rim, rimMat, radius: tireRadius } = wheelParts(options.wheelStyle ?? model.wheelStyle ?? archetype.wheelStyle, model.tireStyle ?? archetype.tireStyle);
     const wheels = [];
-    for (const spot of wheelLayout(archetype, W, L)) {
+    const wheelSpots = wheelLayout(archetype, W, L);
+    for (const spot of wheelSpots) {
         const pivot = new THREE.Group();
         pivot.position.set(spot.x, spot.y, spot.z);
+        if (spot.scale && spot.scale !== 1) pivot.scale.setScalar(spot.scale);
         const spin = new THREE.Group();
         pivot.add(spin);
         spin.add(new THREE.Mesh(tire, sharedMaterials.tire));
         const rimMesh = new THREE.Mesh(rim, rimMat);
-        rimMesh.position.x = spot.sx * 0.01;
+        rimMesh.position.x = (spot.sx || 1) * 0.01;
         spin.add(rimMesh);
         group.add(pivot);
         wheels.push({ pivot, spin, front: spot.front });
     }
 
-    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius, tune: null, tuneKey: null, siren: null, spot: null };
+    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius * (wheelSpots[0]?.scale ?? 1), tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
         const barY = H / 2 + cabin.height + 0.12;
