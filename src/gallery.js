@@ -64,7 +64,7 @@ export function createGallery({ renderer, sharedMaterials }) {
 
     const overlay = document.createElement("div");
     overlay.style.cssText = "position:fixed;left:12px;top:12px;z-index:200;font:12px/1.5 monospace;color:#dfe8f5;background:rgba(8,12,18,.78);padding:8px 10px;border-radius:6px;pointer-events:none";
-    overlay.innerHTML = "GALERIE<br>Ziehen: drehen · Rad: Zoom<br>N Nacht · T Draufsicht · Leertaste Drehung";
+    overlay.innerHTML = "GALERIE<br>Ziehen: drehen · Rad: Zoom<br>N Nacht · T Draufsicht · Leertaste Drehung · [ ] Reihe wechseln";
     document.body.appendChild(overlay);
 
     const camera = new THREE.PerspectiveCamera(48, window.innerWidth / window.innerHeight, 0.3, 400);
@@ -103,6 +103,10 @@ export function createGallery({ renderer, sharedMaterials }) {
             view.pitch = 1.45;
         } else if (key === " ") {
             spin = !spin;
+        } else if (key === "[") {
+            view.targetZ -= 9;
+        } else if (key === "]") {
+            view.targetZ += 9;
         }
     });
     window.addEventListener("resize", () => {

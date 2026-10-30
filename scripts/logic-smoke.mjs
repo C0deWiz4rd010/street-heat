@@ -448,7 +448,7 @@ for (const model of CAR_MODELS) {
     const car = createCar(model, builderMaterials);
     let meshCount = 0;
     car.traverse((node) => { if (node.isMesh) meshCount += 1; });
-    assert.ok(meshCount <= 16, `${model.id}: static parts are merged (${meshCount} meshes)`);
+    assert.ok(meshCount <= 18, `${model.id}: static parts are merged (${meshCount} meshes)`);
     assert.equal(car.userData.parts.wheels.length, 4, `${model.id}: four wheels`);
     const again = createCar(model, builderMaterials);
     const geometries = [];
@@ -465,7 +465,7 @@ const parts = await import("../src/vehicleParts.js");
 const { SHOWCASE_OVERRIDES } = await import("../src/data/vehicles.js");
 const sampleModel = CAR_MODELS[0];
 const sampleContext = parts.partContext(sampleModel, archetypeFor(sampleModel));
-const KNOWN_GROUPS = new Set(["paint", "trim", "dark", "accent", "head", "tail"]);
+const KNOWN_GROUPS = new Set(["paint", "trim", "dark", "accent", "head", "tail", "glow"]);
 for (const name of parts.PART_NAMES) {
     const built = parts.PARTS[name](sampleContext);
     const groups = Object.keys(built);
@@ -604,6 +604,53 @@ for (let round = 0; round < 25; round += 1) {
     assert.ok(rivals.every((rival) => fleet.RIVAL_STYLES.some((style) => style.color === rival.color)), "rival colours come from the style presets");
 }
 assert.equal(fleet.pickRivalModels(CAR_MODELS, 2, seeded).length, 2);
+
+// --- Phase V4: the ten player cars, form-based hitbox, wheelbase, reputation gates ----------
+const { carRequirement } = await import("../src/progression.js");
+const { playerRadius, wheelbaseTurnFactor } = await import("../src/physics/vehicle.js");
+const { reputationTier: tierOf } = await import("../src/progression.js");
+assert.equal(CAR_MODELS.length, 10, "four classics plus six new cars");
+assert.deepEqual(CAR_MODELS.slice(0, 4).map((car) => car.id), ["comet", "bulldog", "needle", "mule"], "the saved car ids keep their order");
+assert.deepEqual(CAR_MODELS.slice(4).map((car) => car.id), ["hornet", "scarab", "barge", "forge", "tide", "wraith"]);
+const silhouettes = new Set(CAR_MODELS.map((car) => `${car.body ?? car.roof}:${car.length}:${car.width}`));
+assert.equal(silhouettes.size, CAR_MODELS.length, "every player car has its own shape and size");
+for (const car of CAR_MODELS.slice(4)) {
+    assert.ok(fleet.BODY_ARCHETYPES[car.body], `${car.id}: body exists`);
+    for (const feature of car.features ?? []) assert.ok(parts.PART_NAMES.includes(feature), `${car.id}: unknown feature ${feature}`);
+    assert.ok(car.unlockCost > 0 && car.description.length > 10, `${car.id}: priced and described`);
+    if (car.requires) {
+        assert.ok(car.requires.tier >= 1 && car.requires.tier < REPUTATION_TIERS.length, `${car.id}: tier in range`);
+        if (car.requires.district) assert.ok(cityDistricts.includes(car.requires.district), `${car.id}: known district`);
+    }
+    assert.ok(car.width <= 2.3 && car.length <= 5.8, `${car.id}: fits the streets`);
+}
+assert.deepEqual(CAR_MODELS.slice(4).filter((car) => car.requires?.district).map((car) => car.requires.district).sort(), ["downtown", "harbor", "industrial", "park"], "one signature car per district");
+assert.equal(CAR_MODELS.filter((car) => !car.requires && car.unlockCost > 0).length, 4, "Bulldog, Needle, Mule and Hornet are bought with cash alone");
+
+const scarab = CAR_MODELS.find((car) => car.id === "scarab");
+assert.equal(carRequirement(scarab, {}).met, false, "no reputation, no Scarab");
+assert.match(carRequirement(scarab, {}).text, /Park/);
+assert.equal(carRequirement(scarab, { park: REPUTATION_TIERS[2].at }).met, true, "tier 2 in the park unlocks it");
+assert.equal(carRequirement(scarab, { downtown: 99999 }).met, false, "the wrong district does not count");
+const wraith = CAR_MODELS.find((car) => car.id === "wraith");
+assert.equal(carRequirement(wraith, { harbor: REPUTATION_TIERS[4].at }).met, true, "the Wraith accepts any district at tier 4");
+assert.equal(carRequirement(wraith, { harbor: REPUTATION_TIERS[3].at }).met, false);
+assert.equal(carRequirement(CAR_MODELS[1], {}).met, true, "cars without requirement are only gated by price");
+assert.ok(tierOf(REPUTATION_TIERS[2].at).index === 2);
+
+assert.ok(Math.abs(playerRadius(CAR_MODELS[0]) - 1.2438) < 0.01, "the Comet keeps its old ~1.25 contact radius");
+const radii = CAR_MODELS.map((car) => playerRadius(car));
+assert.ok(radii[2] < radii[0] && radii[0] < radii[1] && radii[1] < radii[3], "Needle < Comet < Bulldog < Mule");
+assert.ok(playerRadius(CAR_MODELS.find((car) => car.id === "hornet")) < playerRadius(CAR_MODELS.find((car) => car.id === "barge")), "Hornet is tighter than Barge");
+for (const car of CAR_MODELS) {
+    const factor = wheelbaseTurnFactor(car);
+    assert.ok(factor >= 0.9 && factor <= 1.1, `${car.id}: wheelbase factor stays gentle`);
+}
+assert.ok(wheelbaseTurnFactor({ length: 3.5 }) > wheelbaseTurnFactor({ length: 5.6 }), "short cars turn tighter than long ones");
+assert.equal(wheelbaseTurnFactor({ length: 4.6 }), 1, "the reference length is neutral");
+assert.ok(parts.RESERVED_KEYS === undefined, "parts module has no key table");
+const { RESERVED_KEYS: reservedKeys } = await import("../src/bindings.js");
+assert.ok(["1", "5", "9", "0"].every((digit) => reservedKeys.has(digit)), "all car-switch digits stay reserved");
 
 clearProfile();
 assert.equal(loadProfile(CAR_MODELS, UPGRADES).cash, 0);

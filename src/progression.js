@@ -1,4 +1,4 @@
-import { REPUTATION_TIERS } from "./config.js";
+import { DISTRICTS, REPUTATION_TIERS } from "./config.js";
 
 /** Reputation points -> tier info for one district. */
 export function reputationTier(points, tiers = REPUTATION_TIERS) {
@@ -91,4 +91,21 @@ export function generateTags({ buildings, districtIds, districtIdOf, perDistrict
         entries.forEach((entry, index) => tags.push({ id: `${districtId}-${index}`, districtId, ...entry }));
     }
     return tags;
+}
+
+/**
+ * Whether a car's reputation requirement is met. `requires: { district, tier }` needs that tier in one district,
+ * `requires: { tier }` in any district. Cars without `requires` are only gated by price.
+ */
+export function carRequirement(car, reputation = {}) {
+    const need = car.requires;
+    if (!need) return { met: true, text: "" };
+    const tierName = REPUTATION_TIERS[need.tier]?.name ?? `Stufe ${need.tier}`;
+    if (need.district) {
+        const have = reputationTier(reputation[need.district] ?? 0).index;
+        const name = DISTRICTS.find((district) => district.id === need.district)?.name ?? need.district;
+        return { met: have >= need.tier, text: `Ruf ${name}: ${tierName}` };
+    }
+    const best = Math.max(0, ...DISTRICTS.map((district) => reputationTier(reputation[district.id] ?? 0).index));
+    return { met: best >= need.tier, text: `Ruf (ein Bezirk): ${tierName}` };
 }

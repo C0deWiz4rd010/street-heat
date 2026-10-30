@@ -72,7 +72,8 @@ export function createInput({
         }
 
         if (key === "r") onRestart();
-        if (event.key >= "1" && event.key <= "4") onSwitchCar(Number(event.key) - 1);
+        if (event.key >= "1" && event.key <= "9") onSwitchCar(Number(event.key) - 1);
+        if (event.key === "0") onSwitchCar(9);
     }, true);
 
     window.addEventListener("keyup", (event) => {

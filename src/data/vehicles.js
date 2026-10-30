@@ -112,6 +112,31 @@ Object.assign(BODY_ARCHETYPES, {
     },
 });
 
+// Bodies of the new player cars.
+Object.assign(BODY_ARCHETYPES, {
+    cruiser: {
+        id: "cruiser",
+        profile: { noseX: 0.3, tailX: 0.3, noseDrop: 0.45, tailDrop: 0.25 },
+        cabin: { from: -0.3, to: 0.12, height: 0.36, rake: 0.1 },
+        wheels: { ...STD_WHEELS, base: 0.34 },
+        features: [],
+    },
+    buggy: {
+        id: "buggy",
+        profile: { noseX: 0.3, tailX: 0.42, noseDrop: 0.4, tailDrop: 0.3 },
+        cabin: { from: -0.05, to: 0.14, height: 0.16, rake: 0.06 },
+        wheels: STD_WHEELS,
+        features: ["rollCage"],
+    },
+    wedge: {
+        id: "wedge",
+        profile: { noseX: 0.04, tailX: 0.44, noseDrop: 0.14, tailDrop: 0.4 },
+        cabin: { from: -0.28, to: -0.02, height: 0.24, rake: 0.2 },
+        wheels: { ...STD_WHEELS, base: 0.31 },
+        features: [],
+    },
+});
+
 // Police bodies.
 Object.assign(BODY_ARCHETYPES, {
     suv: {

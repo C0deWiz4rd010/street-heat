@@ -32,12 +32,12 @@ Diese Module kennen weder DOM noch Three.js und laufen in `npm test` headless:
 
 | Modul | Inhalt |
 | --- | --- |
-| `physics/vehicle.js` | Motor, Lenkung, Grip, Drift-Übergang, Wandreaktion, Untergründe |
+| `physics/vehicle.js` | Motor, Lenkung (mit Radstand-Faktor), Grip, Drift-Übergang, Wandreaktion, Untergründe, Hitbox aus der Form (`vehicleRadius`, `playerRadius`) |
 | `ai/police.js` | Straßengraph, A\*, Sichtlinie, Wegpunkte |
 | `data/missions.js` | deklarative Missionen, Boss-Aufträge, Modifier, `resolveMission` |
 | `scoring.js` | Combo-Multiplikator und -Timer, Heat-Abklingen |
 | `economy.js` | Kapazitäten (Karosserie, Nitro), Cash pro Run, Preistabelle |
-| `progression.js` | Ruf-Stufen, Graffiti-Tag-Verteilung |
+| `progression.js` | Ruf-Stufen, Graffiti-Tag-Verteilung, Auto-Freischaltung über Ruf (`carRequirement`) |
 | `save.js` | Format-Version, Migration, Laden mit Prüfung |
 | `bindings.js`, `gamepad.js` | Tasten-Mapping, Gamepad-Lesen, Rumble-Stärke |
 | `music.js`, `siren.js` | Notendaten, Ebenen je Heat, Sirenen-Muster (Synthese in `audio.js`/`siren.js`) |

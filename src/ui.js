@@ -1,4 +1,4 @@
-import { reputationTier } from "./progression.js";
+import { carRequirement, reputationTier } from "./progression.js";
 import { clamp } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
 import { REPUTATION_TIERS } from "./config.js";
@@ -716,7 +716,7 @@ function renderProfileHud(ui, state) {
 
 function renderGarageHud(ui, state) {
     // Rebuilding the buttons every frame would drop keyboard focus, so only redraw on change.
-    const signature = JSON.stringify([Math.round(state.cash), state.unlockedCars, state.playerModelIndex, state.upgrades, state.paint, state.unlocks, state.achievements.length, state.screen === "garage"]);
+    const signature = JSON.stringify([Math.round(state.cash), state.unlockedCars, state.playerModelIndex, state.upgrades, state.paint, state.unlocks, state.reputation, state.achievements.length, state.screen === "garage"]);
     if (ui._garageSignature === signature) return;
     ui._garageSignature = signature;
     ui.paintList.innerHTML = PAINTS.map((paint) => {
@@ -728,7 +728,8 @@ function renderGarageHud(ui, state) {
     ui.carList.innerHTML = CAR_MODELS.map((car, index) => {
         const unlocked = state.unlockedCars.includes(car.id);
         const selected = index === state.playerModelIndex;
-        const action = unlocked ? (selected ? "Aktiv" : "Wählen") : `$${car.unlockCost}`;
+        const requirement = carRequirement(car, state.reputation);
+        const action = unlocked ? (selected ? "Aktiv" : "Wählen") : requirement.met ? `$${car.unlockCost}` : `${requirement.text} · $${car.unlockCost}`;
         const stats = [
             { label: "Speed", value: car.maxSpeed / 24, color: tok("blue", "#63c8ff") },
             { label: "Accel", value: car.acceleration / 32, color: tok("green", "#57d68d") },
@@ -744,7 +745,7 @@ function renderGarageHud(ui, state) {
             </div>`
         ).join("");
         return `
-            <button class="garage-card ${selected ? "selected" : ""}" data-car-index="${index}">
+            <button class="garage-card ${selected ? "selected" : ""} ${!unlocked && !requirement.met ? "gated" : ""}" data-car-index="${index}">
                 <span>${car.name}</span>
                 <small>${car.description}</small>
                 <div class="stat-bars">${statHtml}</div>

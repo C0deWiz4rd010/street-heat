@@ -141,7 +141,7 @@ function staticGeometry(model, archetype) {
     if (entry) return entry;
     const ctx = partContext(model, archetype);
     const { L, W, H, cabin } = ctx;
-    const groups = { paint: [bodyGeometry(model, archetype)], trim: [], dark: [], accent: [], head: [], tail: [] };
+    const groups = { paint: [bodyGeometry(model, archetype)], trim: [], dark: [], accent: [], head: [], tail: [], glow: [] };
 
     groups.trim.push(box({ x: W * 0.84, y: 0.07, z: ctx.roofLength }, { x: 0, y: ctx.roofY, z: ctx.roofZ }));
     groups.dark.push(box({ x: W * 1.02, y: 0.16, z: 0.22 }, { x: 0, y: -H / 2 + 0.12, z: L / 2 }));
@@ -227,6 +227,9 @@ export function createCar(model, sharedMaterials, options = {}) {
     addMerged(fixed.accent, accentMat, true, true);
     addMerged(fixed.head, headlightMat, false, false);
     addMerged(fixed.tail, tailMat, false, false);
+    // Neon strips glow beyond the bloom threshold, whatever the time of day.
+    addMerged(fixed.glow, sharedPart("glow:cyan", () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 2, 2.4) })), false, false);
+    chassis.position.y = model.lift ?? 0;
 
     // Wheels: pivot (steering) > spin (rolling) > tire + rim
     const { tire, rim, rimMat, radius: tireRadius } = wheelParts(options.wheelStyle ?? model.wheelStyle ?? archetype.wheelStyle, model.tireStyle ?? archetype.tireStyle);

@@ -1434,3 +1434,12 @@ select:focus-visible,
 #bindingReset {
     justify-self: end;
 }
+
+.garage-card.gated {
+    opacity: 0.62;
+}
+
+.garage-card.gated strong {
+    color: var(--warn-alt);
+    font-size: 12px;
+}

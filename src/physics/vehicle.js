@@ -26,7 +26,7 @@ export function deriveSpec(model, { upgrades = {}, weatherGrip = 1, surface, inS
         reverseFactor: CONFIG.player.reverseFactor,
         maxSpeed: model.maxSpeed * engineMult * surface.speed + (inShortcut ? shortcutBoost : 0),
         acceleration: (model.acceleration / Math.sqrt(mass)) * (1 + engineLevel * P.accelPerLevel) * (0.92 + weatherGrip * 0.08) * surface.speed,
-        turnPower: model.turn * (1 + gripLevel * P.turnPerGripLevel) * weatherGrip * (inShortcut ? 1.08 : 1),
+        turnPower: model.turn * wheelbaseTurnFactor(model) * (1 + gripLevel * P.turnPerGripLevel) * weatherGrip * (inShortcut ? 1.08 : 1),
         brakePower: (P.brakeBase + gripLevel * P.brakePerLevel) * (model.brakeFactor ?? 0.68) * weatherGrip,
         coastFriction: P.coastBase + gripLevel * P.coastPerLevel,
         reverseAccel: ((model.acceleration * P.reverseAccelShare) / Math.sqrt(mass)) * (1 + engineLevel * 0.1),
@@ -108,6 +108,16 @@ export function applyGrip(lat, p, ctl, spec, dt) {
     slide *= 1 - (ctl.forward ? P.throttleDriftSlip : 0);
     const grip = lerp(base, slide, p.gripBlend ?? 0);
     return lat * Math.exp(-(1 - clamp(grip, 0.01, 0.99)) * P.lateralDecayRate * dt);
+}
+
+/** The player's contact radius: slightly tighter than the raw footprint (0.9 keeps the Comet at its old 1.25). */
+export function playerRadius(model) {
+    return vehicleRadius(model) * 0.9;
+}
+
+/** Long cars turn wider, short ones tighter (gentle: 0.9 to 1.1 around a 4.6 m reference). */
+export function wheelbaseTurnFactor(model) {
+    return clamp(Math.pow(4.6 / (model.length ?? 4.6), 0.3), 0.9, 1.1);
 }
 
 /** Collision radius of a vehicle from its footprint (the same formula traffic has always used). */

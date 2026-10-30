@@ -28,7 +28,7 @@ export const ACTION_LABELS = {
 };
 
 // Keys that must stay free for fixed functions (pause, debug, car switch, restart, menus).
-export const RESERVED_KEYS = new Set(["escape", "p", "r", "f3", "f4", "tab", "enter", "1", "2", "3", "4", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
+export const RESERVED_KEYS = new Set(["escape", "p", "r", "f3", "f4", "tab", "enter", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "arrowup", "arrowdown", "arrowleft", "arrowright"]);
 
 /** Readable key name for the UI. */
 export function keyLabel(key) {

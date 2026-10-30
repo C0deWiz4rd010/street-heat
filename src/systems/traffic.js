@@ -134,7 +134,7 @@ export function createTrafficSystem({
 
             const distToPlayer = Math.sqrt(distanceSq(state.player.x, state.player.z, car.x, car.z));
             // Contact distance follows the footprint: a scooter is hit later than a bus (0.91 keeps the old feel for cars).
-            const hitDist = (car.radius + CONFIG.player.radius) * 0.91;
+            const hitDist = (car.radius + (state.player.radius ?? CONFIG.player.radius)) * 0.91;
 
             // Near-miss
             if (distToPlayer > hitDist && distToPlayer < hitDist + 2.8 && playerSpeedMag > 8) {

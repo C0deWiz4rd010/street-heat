@@ -3,7 +3,7 @@ import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PIC
 import { clamp, distanceSq, axisYaw } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
 import { registerCombo, tickCombo } from "./scoring.js";
-import { reputationTier } from "./progression.js";
+import { carRequirement, reputationTier } from "./progression.js";
 import { applySpeedFactor } from "./physics/vehicle.js";
 import { createCameraSystem } from "./systems/camera.js";
 import { createMissionSystem } from "./systems/missions.js";
@@ -378,7 +378,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             block.cooldown = Math.max(0, block.cooldown - dt);
             block.mesh.position.y = 0.12 + Math.sin(block.life * 5) * 0.015;
 
-            if (distanceSq(state.player.x, state.player.z, block.x, block.z) < (block.radius + CONFIG.player.radius) ** 2 && block.cooldown <= 0) {
+            if (distanceSq(state.player.x, state.player.z, block.x, block.z) < (block.radius + (state.player.radius ?? CONFIG.player.radius)) ** 2 && block.cooldown <= 0) {
                 block.cooldown = 1.4;
                 playerSystem.damage(6 + Math.abs(state.player.speed) * 0.38, "hazard");
                 applySpeedFactor(state.player, 0.32);
@@ -417,7 +417,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             }
             hazard.life -= dt;
             hazard.mesh.material.opacity = Math.max(0.18, hazard.life / hazard.maxLife);
-            if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + CONFIG.player.radius) ** 2) {
+            if (distanceSq(state.player.x, state.player.z, hazard.x, hazard.z) < (hazard.radius + (state.player.radius ?? CONFIG.player.radius)) ** 2) {
                 if (hazard.type === "debris") {
                     playerSystem.damage((hazard.damage ?? 2.2) + Math.abs(state.player.speed) * 0.1, "hazard");
                     applySpeedFactor(state.player, hazard.slowdown ?? 0.62);
@@ -1258,6 +1258,12 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const car = CAR_MODELS[index];
         if (!car) return;
         if (!state.unlockedCars.includes(car.id)) {
+            const requirement = carRequirement(car, state.reputation);
+            if (!requirement.met) {
+                setStatus(`${car.name}: ${requirement.text} nötig.`, 2.2);
+                audio?.denied();
+                return;
+            }
             if (!spendCash(car.unlockCost)) {
                 setStatus(`${car.name} kostet $${car.unlockCost}.`, 1.8);
                 audio?.denied();

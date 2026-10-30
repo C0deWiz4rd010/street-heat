@@ -1,5 +1,5 @@
 import { CAR_MODELS, CONFIG, DISTRICTS, VEHICLE_PHYSICS, WEATHER_MODES } from "../config.js";
-import { applyEngine, applyGrip, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, surfaceAt, updateDrift } from "../physics/vehicle.js";
+import { applyEngine, applyGrip, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, playerRadius, surfaceAt, updateDrift } from "../physics/vehicle.js";
 import { clamp } from "../util/math.js";
 import { obstacleAt, pushOutBuildings } from "../world.js";
 import { replaceCarModel } from "../vehicles.js";
@@ -31,6 +31,9 @@ export function createPlayerSystem({
     function update(dt, input) {
         const model = CAR_MODELS[state.playerModelIndex];
         const player = state.player;
+        // The contact radius follows the car's footprint (a Needle is tighter than a Mule).
+        const radius = playerRadius(model);
+        player.radius = radius;
         const district = state.district ?? DISTRICTS[0];
         const inShortcut = district.id === "park" && isInsideShortcutZone(player.x, player.z);
         const surface = surfaceAt(player.x, player.z, district.id, inShortcut);
@@ -172,7 +175,7 @@ export function createPlayerSystem({
             // Save pre-pushout position to derive the collision normal for wall sliding
             preX = next.x;
             preZ = next.z;
-            hitBuilding = pushOutBuildings(world, next, CONFIG.player.radius);
+            hitBuilding = pushOutBuildings(world, next, radius);
         }
         // The map edge removes only the velocity component pointing out of the map.
         if (edgeX) cancelNormalVelocity(player, edgeX, 0);
@@ -182,14 +185,14 @@ export function createPlayerSystem({
             player.speedMag = Math.sqrt(player.vx * player.vx + player.vz * player.vz);
         }
 
-        const hitObstacle = obstacleAt(world, next.x, next.z, CONFIG.player.radius);
+        const hitObstacle = obstacleAt(world, next.x, next.z, radius);
         let destroyedReaction = null;
         if (hitObstacle) {
             const dx = next.x - hitObstacle.x;
             const dz = next.z - hitObstacle.z;
             const distance = Math.sqrt(dx * dx + dz * dz);
             // Push out by the actual overlap along the contact normal (fallback: straight back).
-            const overlap = hitObstacle.radius + CONFIG.player.radius - distance + 0.05;
+            const overlap = hitObstacle.radius + radius - distance + 0.05;
             const pushX = distance > 0.001 ? dx / distance : -newFwdX;
             const pushZ = distance > 0.001 ? dz / distance : -newFwdZ;
             next.x += pushX * overlap;

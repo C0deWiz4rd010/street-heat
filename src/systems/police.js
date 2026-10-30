@@ -321,7 +321,7 @@ export function createPoliceSystem({
                 }
             }
 
-            if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < ((agent.radius + CONFIG.player.radius) * 0.91) ** 2 && agent.cooldown <= 0) {
+            if (distanceSq(state.player.x, state.player.z, agent.x, agent.z) < ((agent.radius + (state.player.radius ?? CONFIG.player.radius)) * 0.91) ** 2 && agent.cooldown <= 0) {
                 agent.cooldown = 0.9;
                 const playerModel = CAR_MODELS[state.playerModelIndex];
                 const playerMass = playerModel.mass ?? 1.0;

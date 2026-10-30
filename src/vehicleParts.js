@@ -163,6 +163,39 @@ const CIVILIAN_PARTS = {
             ],
         };
     },
+    blower({ L, H }) {
+        return {
+            dark: [
+                cylinder(0.17, 0.4, { x: 0, y: H / 2 + 0.2, z: L * 0.2 }, 10, { x: 0, z: Math.PI / 2 }),
+                box({ x: 0.26, y: 0.12, z: 0.32 }, { x: 0, y: H / 2 + 0.44, z: L * 0.2 }),
+            ],
+        };
+    },
+    rollCage({ L, W, H, roofZ }) {
+        const top = H / 2 + 0.58;
+        return {
+            dark: [
+                ...both.flatMap((side) => [
+                    box({ x: 0.05, y: 0.58, z: 0.05 }, { x: side * W * 0.38, y: H / 2 + 0.29, z: roofZ + L * 0.12 }),
+                    box({ x: 0.05, y: 0.58, z: 0.05 }, { x: side * W * 0.38, y: H / 2 + 0.29, z: roofZ - L * 0.12 }),
+                    box({ x: 0.05, y: 0.05, z: L * 0.25 }, { x: side * W * 0.38, y: top, z: roofZ }),
+                ]),
+                box({ x: W * 0.76, y: 0.05, z: 0.05 }, { x: 0, y: top, z: roofZ }),
+            ],
+        };
+    },
+    edgeGlow({ L, W, H }) {
+        return { glow: both.map((side) => box({ x: 0.03, y: 0.04, z: L * 0.7 }, { x: side * (W / 2 + 0.01), y: -H / 2 + 0.12, z: 0 })) };
+    },
+    neonBars({ L, W, H }) {
+        return {
+            glow: [
+                box({ x: W * 0.8, y: 0.05, z: 0.06 }, { x: 0, y: H / 2 + 0.05, z: L / 2 - 0.1 }),
+                box({ x: W * 0.8, y: 0.05, z: 0.06 }, { x: 0, y: H / 2 + 0.05, z: -L / 2 + 0.1 }),
+                ...both.map((side) => box({ x: 0.04, y: 0.05, z: L * 0.7 }, { x: side * (W / 2 + 0.02), y: -H / 2 + 0.1, z: 0 })),
+            ],
+        };
+    },
     surfboard({ L, roofZ, roofY }) {
         return { accent: [box({ x: 0.34, y: 0.04, z: L * 0.72 }, { x: 0, y: roofY + 0.14, z: roofZ })] };
     },

@@ -4,7 +4,7 @@ Street Heat ist ein Neon-Noir-Fluchtspiel im Browser, gebaut mit Three.js und Vi
 
 ## Features
 
-- **Fahren:** Velocity-basierte Physik mit Drift, Trail-Braking, Nitro, Untergründen (Straße, Pflaster, Schotter, Dock, Gras) und vier Autos mit eigenem Charakter.
+- **Fahren:** Velocity-basierte Physik mit Drift, Trail-Braking, Nitro, Untergründen (Straße, Pflaster, Schotter, Dock, Gras) und zehn Autos mit eigenem Charakter (vier Klassiker, Hornet, vier Bezirks-Signaturautos freischaltbar über Ruf, das Endgame-Auto Wraith).
 - **Stadt:** Vier Bezirke (Downtown, Industrial, Park, Harbor) mit eigener Tonart, Lichtfarbe und Details. Tag/Nacht-Übergang, Regen, Nebel und Gewitter mit Blitzen. Fester Seed, die Karte sieht immer gleich aus.
 - **Polizei:** Verfolgung über das Straßennetz (A\*), Sichtlinie und Suchverhalten, Rollen (Tail, Flank, Ram, PIT, Zange, Blocker), Roadblocks, Spike-Strips mit Vorwarnung, EMP, Helikopter bei Heat 5.
 - **Missionen:** Missionsketten pro Bezirk (deklarativ in `src/data/missions.js`), Boss-Aufträge, Modifier („Nachtfahrt“, „Keine Bremse“, „Erzwungene Verfolgung“, „Zeitangriff“) und ein echter Fail-State mit Wiederholen gegen Cash.
@@ -26,6 +26,7 @@ Street Heat ist ein Neon-Noir-Fluchtspiel im Browser, gebaut mit Three.js und Vi
 | Garage | G | L3 | – |
 | Kamera nah / normal / weit | C | Back | – |
 | Pause | P oder Esc | Start | – |
+| Auto wechseln (freigeschaltete) | 1 bis 9, 0 | – | – |
 | Neustart | R | – | – |
 | Debug-Panel / Grafikstufe | F3 / F4 | – | – |
 
