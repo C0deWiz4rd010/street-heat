@@ -142,6 +142,33 @@ export function createInitialState() {
         garageCooldown: 0,
         safehouseCooldown: 0,
         roadblockCooldown: 0,
+        lastTurnInput: 0,
+        nearMiss: { count: 0, timer: 0, streak: 0, streakTimer: 0 },
+        nearestPoliceDistance: Infinity,
+        popup: { text: "", timer: 0, type: "normal" },
+        // Phase 6.1: Provoke mechanic
+        provoke: {
+            cooldown: 0,
+            active: 0,        // remaining boost duration
+            fxTimer: 0,       // camera FX flash
+        },
+        // Phase 6.2: clean-escape tracking
+        cleanEscape: {
+            startedAt: 0,
+            active: false,
+            crashes: 0,
+        },
+        // Phase 6.3: per-mission modifiers
+        modifiers: {
+            nightOnly: false,
+            noBrake: false,
+            forcedPursuit: false,
+            timeAttack: false,
+            label: "",
+        },
+        // Phase 5.3: police role assignments keyed by agent id
+        policeAssignments: {},
+        policeAssignmentTimer: 0,
     };
 }
 

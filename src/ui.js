@@ -99,7 +99,7 @@ export function mountHud(root) {
         <div id="popup"></div>
         <div id="actionPrompt"></div>
         <div id="status">Direkt im Spiel. Fahre los.</div>
-        <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>G Garage | F3 Debug | R Neustart</div>
+        <div id="garageHint">WASD / Pfeile fahren<br>Leertaste Drift | Shift Nitro<br>Q Provoke (Heat +1, Multiplikator +0.5)<br>G Garage | F3 Debug | R Neustart</div>
 
         <div id="touchControls" aria-label="Touch-Steuerung">
             <div class="touch-pad">
@@ -111,6 +111,7 @@ export function mountHud(root) {
             <div class="touch-actions">
                 <button data-key="shift" aria-label="Nitro">N2O</button>
                 <button data-key=" " aria-label="Drift">DR</button>
+                <button data-key="q" aria-label="Provoke">PRO</button>
                 <button data-key="e" aria-label="Interagieren">E</button>
             </div>
         </div>

@@ -93,6 +93,9 @@ export const DISTRICTS = [
         eventCashMultiplier: 1,
         eventScoreMultiplier: 1,
         eventHeatBonus: 0,
+        // Phase 6.4: off-road penalty on grass — stay on the streets/shortcuts
+        offRoadPenalty: true,
+        offRoadFactor: 0.78,
         pickupWeights: { cash: 0.17, repair: 0.1, nitro: 0.39, intel: 0.12, parts: 0.06, emp: 0.16 },
         eventWeights: { cashDrop: 0.18, partsCache: 0.12, hotVan: 0.08, roadClosure: 0.06, vipConvoy: 0.08, streetRace: 0.28, hiddenCache: 0.2 },
     },
@@ -241,6 +244,9 @@ export const CAR_MODELS = [
         mass: 1.0,
         driftThreshold: 0.38,
         brakeFactor: 0.68,
+        torquePeak: 0.45,
+        gripBalance: 0,
+        enginePitchBase: 60,
     },
     {
         id: "bulldog",
@@ -259,6 +265,9 @@ export const CAR_MODELS = [
         mass: 1.65,
         driftThreshold: 0.55,
         brakeFactor: 0.52,
+        torquePeak: 0.35,
+        gripBalance: 0.3,
+        enginePitchBase: 48,
     },
     {
         id: "needle",
@@ -277,6 +286,9 @@ export const CAR_MODELS = [
         mass: 0.72,
         driftThreshold: 0.28,
         brakeFactor: 0.82,
+        torquePeak: 0.55,
+        gripBalance: -0.4,
+        enginePitchBase: 78,
     },
     {
         id: "mule",
@@ -295,6 +307,9 @@ export const CAR_MODELS = [
         mass: 1.9,
         driftThreshold: 0.62,
         brakeFactor: 0.44,
+        torquePeak: 0.30,
+        gripBalance: 0.5,
+        enginePitchBase: 42,
     },
 ];
 

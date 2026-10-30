@@ -1,12 +1,19 @@
+import { CAR_MODELS } from "./config.js";
+
 export function createAudioDirector() {
     let context = null;
     let master = null;
     let engineOsc = null;
     let engineGain = null;
+    let engineSubOsc = null;
+    let engineSubGain = null;
     let sirenOsc = null;
     let sirenGain = null;
     let driftOsc = null;
     let driftGain = null;
+    let wallSlideNode = null;
+    let wallSlideGain = null;
+    let lastSirenDist = 0;
     let unlocked = false;
     let muted = false;
 
@@ -27,6 +34,14 @@ export function createAudioDirector() {
         engineOsc.connect(engineGain).connect(master);
         engineOsc.start();
 
+        // Phase 7.1: low-frequency engine sub-layer (active during nitro)
+        engineSubOsc = context.createOscillator();
+        engineSubOsc.type = "sine";
+        engineSubGain = context.createGain();
+        engineSubGain.gain.value = 0;
+        engineSubOsc.connect(engineSubGain).connect(master);
+        engineSubOsc.start();
+
         // Drift squeal oscillator
         driftOsc = context.createOscillator();
         driftOsc.type = "sine";
@@ -42,6 +57,23 @@ export function createAudioDirector() {
         sirenOsc.connect(sirenGain).connect(master);
         sirenOsc.start();
 
+        // Phase 7.1: wall-slide noise via filtered white noise
+        const bufferSize = context.sampleRate * 1;
+        const noiseBuffer = context.createBuffer(1, bufferSize, context.sampleRate);
+        const noiseData = noiseBuffer.getChannelData(0);
+        for (let i = 0; i < bufferSize; i += 1) noiseData[i] = Math.random() * 2 - 1;
+        wallSlideNode = context.createBufferSource();
+        wallSlideNode.buffer = noiseBuffer;
+        wallSlideNode.loop = true;
+        const wallSlideFilter = context.createBiquadFilter();
+        wallSlideFilter.type = "bandpass";
+        wallSlideFilter.frequency.value = 1400;
+        wallSlideFilter.Q.value = 1.2;
+        wallSlideGain = context.createGain();
+        wallSlideGain.gain.value = 0;
+        wallSlideNode.connect(wallSlideFilter).connect(wallSlideGain).connect(master);
+        wallSlideNode.start();
+
         unlocked = true;
     }
 
@@ -55,12 +87,22 @@ export function createAudioDirector() {
         if (!unlocked || !context) return;
         const now = context.currentTime;
 
+        // Phase 7.1: per-car engine pitch base
+        const model = CAR_MODELS[state.playerModelIndex] ?? CAR_MODELS[0];
+        const pitchBase = model.enginePitchBase ?? 58;
+
         // Engine — pitch driven by total speedMag so drift/sideslip also raises note
         const speedMag = state.player.speedMag ?? Math.abs(state.player.speed);
         const engineActive = state.running && !state.paused;
         const engineLevel = engineActive ? Math.min(0.26, 0.035 + speedMag * 0.012) : 0;
-        engineOsc.frequency.setTargetAtTime(58 + speedMag * 10 + state.player.drift * 22, now, 0.05);
+        engineOsc.frequency.setTargetAtTime(pitchBase + speedMag * 10 + state.player.drift * 22, now, 0.05);
         engineGain.gain.setTargetAtTime(engineLevel, now, 0.08);
+
+        // Phase 7.1: nitro sub-layer growl
+        const nitroActive = engineActive && state.player.nitroActive;
+        const subLevel = nitroActive ? Math.min(0.12, 0.04 + speedMag * 0.006) : 0;
+        engineSubOsc.frequency.setTargetAtTime(pitchBase * 0.5 + speedMag * 4, now, 0.05);
+        engineSubGain.gain.setTargetAtTime(subLevel, now, 0.08);
 
         // Drift squeal — fades in past drift 0.35, pitch climbs with speed and drift depth
         const driftDepth = engineActive ? Math.max(0, (state.player.drift - 0.35) / 0.65) : 0;
@@ -68,15 +110,24 @@ export function createAudioDirector() {
         driftOsc.frequency.setTargetAtTime(driftFreq, now, 0.04);
         driftGain.gain.setTargetAtTime(driftDepth * 0.13, now, 0.06);
 
-        // Siren — volume scales with nearest police car distance
+        // Phase 7.1: Doppler-like siren — approaching cop = higher pitch, receding = lower
         const nearestDist = state.nearestPoliceDistance ?? Infinity;
+        const closingRate = (lastSirenDist - nearestDist) / Math.max(dt, 0.001);
+        lastSirenDist = nearestDist;
         const distFactor = nearestDist < 85 ? Math.min(1, Math.pow(1 - nearestDist / 85, 0.6)) : 0;
         const sirenBase = state.wanted.level > 0 && engineActive ? 0.025 + state.wanted.level * 0.022 : 0;
         const sirenLevel = Math.min(0.24, sirenBase * (0.22 + distFactor * 0.78));
         const sweep = Math.sin(performance.now() * 0.008) * 140;
-        sirenOsc.frequency.setTargetAtTime(620 + sweep, now, 0.03);
+        const doppler = clamp(closingRate * 4, -180, 180);
+        sirenOsc.frequency.setTargetAtTime(620 + sweep + doppler, now, 0.03);
         sirenGain.gain.setTargetAtTime(sirenLevel, now, 0.12);
+
+        // Phase 7.1: Wall slide scrape
+        const wallSlide = engineActive ? (state.wallSlide ?? 0) : 0;
+        wallSlideGain.gain.setTargetAtTime(Math.min(0.18, wallSlide * 0.22), now, 0.04);
     }
+
+    function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
 
     function blip(frequency, duration = 0.08, type = "triangle", gain = 0.18) {
         if (!unlocked || !context) return;
