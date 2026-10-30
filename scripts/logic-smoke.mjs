@@ -248,7 +248,7 @@ assert.equal(createOnboarding({ isDone: () => true }).update(tipState, 1), "", "
 
 // --- Wall response, paints, economy ---------------------------------------------------------
 const { glancingWallImpact, headOnDamp } = await import("../src/physics/vehicle.js");
-const { PAINTS } = await import("../src/config.js");
+const { PAINT_JOBS, FINISHES, LIVERIES, LOOK_GROUPS, DEFAULT_LOOK, normalizeLook, resolveLook, isUnlocked } = await import("../src/data/looks.js");
 const { economyTable, estimateRunCash } = await import("../src/economy.js");
 const slider = { vx: 10, vz: 6 };
 const slideSignal = glancingWallImpact(slider, -1, 0, Math.hypot(10, 6), 0.5, 1, 1 / 60);
@@ -260,9 +260,21 @@ const crash = { vx: 12, vz: 0 };
 headOnDamp(crash, 1.9);
 assert.ok(crash.vx < 6.5, "head-on hits shed most of the speed");
 
-assert.equal(PAINTS[0].id, "default");
-assert.equal(new Set(PAINTS.map((paint) => paint.id)).size, PAINTS.length, "paint ids are unique");
-assert.ok(PAINTS.filter((paint) => paint.unlock).every((paint) => REPUTATION_TIERS.some((tier) => tier.unlock === paint.unlock)), "every locked paint is a reputation reward");
+assert.equal(PAINT_JOBS[0].id, "default");
+for (const group of LOOK_GROUPS) {
+    assert.equal(new Set(group.options.map((option) => option.id)).size, group.options.length, `${group.key} ids are unique`);
+    assert.ok(!group.options[0].unlock, `${group.key}: the first option is free`);
+    assert.ok(group.options.some((option) => option.id === DEFAULT_LOOK[group.key]), `${group.key}: the default exists`);
+    assert.ok(group.options.filter((option) => option.unlock).every((option) => REPUTATION_TIERS.some((tier) => tier.unlock === option.unlock)), `${group.key}: every locked option is a reputation reward`);
+}
+assert.ok(PAINT_JOBS.every((job) => FINISHES[job.finish]), "every paint job names a known finish");
+assert.ok(PAINT_JOBS.every((job) => !job.livery || (LIVERIES.includes(job.livery) && job.color2)), "liveries are known and carry an accent colour");
+assert.ok(LIVERIES.every((id) => PAINT_JOBS.some((job) => job.livery === id)), "every livery is used by a paint job");
+const lookResolved = resolveLook({ paint: "chrome", rims: "neonRing", neon: "nope", flame: 5 }, []);
+assert.deepEqual([lookResolved.paint.id, lookResolved.rims.id, lookResolved.neon.id, lookResolved.flame.id], ["default", "default", "cyan", "orange"], "locked or unknown ids fall back to the free default");
+assert.equal(resolveLook({ paint: "chrome" }, ["Lackfarbe Chrom"]).paint.id, "chrome", "unlocked options resolve");
+assert.deepEqual(normalizeLook(null), DEFAULT_LOOK);
+assert.ok(isUnlocked({ unlock: null }, []) && !isUnlocked({ unlock: "x" }, []));
 
 const economy = economyTable();
 assert.ok(economy.perRun > 500, "a run pays something");
@@ -399,7 +411,11 @@ const oldProfile = { version: 2, bestScore: 321, cash: 77, selectedCarId: "needl
 const migrated = migrateProfile(oldProfile);
 assert.equal(migrated.version, SAVE_VERSION, "v2 saves are lifted to the current version");
 assert.deepEqual(migrated.reputation, { downtown: 0, industrial: 0, park: 0, harbor: 0 });
-assert.deepEqual([migrated.tags, migrated.unlocks, migrated.paint, migrated.contract], [[], [], "default", null]);
+assert.deepEqual([migrated.tags, migrated.unlocks, migrated.look.paint, migrated.paint, migrated.contract], [[], [], "default", undefined, null]);
+const migratedV3 = migrateProfile({ version: 3, paint: "pink" });
+assert.deepEqual(migratedV3.look, { ...DEFAULT_LOOK, paint: "pink" }, "v3 paint moves into the look");
+assert.equal(migratedV3.paint, undefined);
+assert.deepEqual(migrateProfile({ version: 4, look: { paint: "camo", rims: 3 } }).look, { paint: "camo", rims: 3 }, "v4 data is left alone");
 assert.equal(migrated.bestScore, 321, "old data survives the migration");
 assert.equal(migrateProfile({ version: 1 }).version, SAVE_VERSION, "very old saves too");
 assert.equal(migrateProfile({ ...migrated, reputation: { park: 50 } }).reputation.park, 50, "a v3 save is not touched");

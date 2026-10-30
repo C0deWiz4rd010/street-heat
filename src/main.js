@@ -1,6 +1,8 @@
 import * as THREE from "three";
 import { createAudioDirector } from "./audio.js";
 import { markShared } from "./effects.js";
+import { resolveLook } from "./data/looks.js";
+import { createGaragePreview } from "./garagePreview.js";
 import { createInput } from "./input.js";
 import { createRenderPipeline } from "./render.js";
 import { createInitialState } from "./state.js";
@@ -11,6 +13,7 @@ import { confirmFocus, moveFocus } from "./menuNav.js";
 import { createOnboarding } from "./onboarding.js";
 import { createSettings } from "./settings.js";
 import { createMaterial } from "./vehicles.js";
+import { CAR_MODELS } from "./config.js";
 import { createWorld } from "./world.js";
 import "./styles.css";
 
@@ -271,9 +274,9 @@ ui.startBtn.addEventListener("click", () => {
 ui.garageBtn.addEventListener("click", () => runtime.openGarage());
 ui.closeGarageBtn.addEventListener("click", () => runtime.closeGarage());
 ui.wipeProfileBtn.addEventListener("click", () => openModal(ui.confirmPanel));
-ui.paintList.addEventListener("click", (event) => {
-    const button = event.target.closest("[data-paint-id]");
-    if (button) runtime.setPaint(button.dataset.paintId);
+ui.lookList.addEventListener("click", (event) => {
+    const button = event.target.closest("[data-look-key]");
+    if (button) runtime.setLookOption(button.dataset.lookKey, button.dataset.lookId);
 });
 ui.carList.addEventListener("click", (event) => {
     const button = event.target.closest("[data-car-index]");
@@ -286,6 +289,7 @@ ui.upgradeList.addEventListener("click", (event) => {
     runtime.buyUpgrade(button.dataset.upgradeId);
 });
 runtime.reset({ showMenu: true });
+const garagePreview = createGaragePreview({ renderer, canvas: ui.garagePreview, sharedMaterials });
 
 const clock = new THREE.Clock();
 
@@ -308,6 +312,7 @@ function animate() {
     input.update(dt);
     state.tip = onboarding.update(state, dt);
     runtime.update(dt, input);
+    if (state.screen === "garage") garagePreview.update(dt, CAR_MODELS[state.playerModelIndex], resolveLook(state.look, state.unlocks));
 }
 
 window.addEventListener("resize", () => {

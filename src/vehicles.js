@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { mergeGeometries } from "three/examples/jsm/utils/BufferGeometryUtils.js";
+import { FINISHES, lookKey } from "./data/looks.js";
 import { archetypeFor, archetypeId, sideContour, wheelLayout } from "./data/vehicles.js";
 import { LIGHT_STYLES, PARTS, RIM_STYLES, TIRE_STYLES, box, partContext } from "./vehicleParts.js";
 
@@ -59,13 +60,164 @@ export function setHeadlightBeamLevel(level) {
     if (beamMaterial) beamMaterial.opacity = Math.max(0, Math.min(1, level)) * 0.55;
 }
 
-export function setPaint(car, color, chrome = false) {
+const NEON_CYAN = "#2ff3ff";
+
+/** A glow colour pushed past the bloom threshold; the default cyan keeps its original tuned value. */
+function glowColor(hex, boost) {
+    return hex === NEON_CYAN ? new THREE.Color(0.2, 1.6, 2.4).multiplyScalar(boost / 1.6) : new THREE.Color(hex).multiplyScalar(boost);
+}
+
+const liveryCache = new Map();
+
+/**
+ * A livery texture: the base colour plus a pattern in the accent colour. The texture is projected from above
+ * (u across the car, v along it, nose at the top of the canvas) and replaces the material colour.
+ */
+function liveryTexture(id, base, accent) {
+    const key = `${id}:${base}:${accent}`;
+    let texture = liveryCache.get(key);
+    if (texture) return texture;
+    const W = 128;
+    const H = 256;
+    const canvas = document.createElement("canvas");
+    canvas.width = W;
+    canvas.height = H;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = base;
+    ctx.fillRect(0, 0, W, H);
+    ctx.fillStyle = accent;
+    ctx.strokeStyle = accent;
+    if (id === "stripes") {
+        ctx.fillRect(44, 0, 40, H);
+    } else if (id === "dualStripes") {
+        ctx.fillRect(34, 0, 14, H);
+        ctx.fillRect(80, 0, 14, H);
+    } else if (id === "flames") {
+        const tongues = [70, 104, 58, 120, 82, 112, 64, 96];
+        const step = W / tongues.length;
+        const draw = (scale, color) => {
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(0, 0);
+            tongues.forEach((length, index) => {
+                ctx.lineTo(index * step + step * 0.5, length * scale);
+                ctx.lineTo((index + 1) * step, length * scale * 0.3);
+            });
+            ctx.lineTo(W, 0);
+            ctx.fill();
+        };
+        draw(1, accent);
+        draw(0.5, "#ffe08a");
+    } else if (id === "checker") {
+        const size = 16;
+        for (let y = 0; y < H / size; y += 1) for (let x = 0; x < W / size; x += 1) if ((x + y) % 2 === 0) ctx.fillRect(x * size, y * size, size, size);
+    } else if (id === "hazard") {
+        ctx.lineWidth = 18;
+        for (let x = -H; x < W + H; x += 44) {
+            ctx.beginPath();
+            ctx.moveTo(x, 0);
+            ctx.lineTo(x + H, H);
+            ctx.stroke();
+        }
+    } else if (id === "camo") {
+        let seed = 7;
+        const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+        for (let i = 0; i < 46; i += 1) {
+            ctx.fillStyle = i % 3 === 0 ? "#6f7d52" : accent;
+            ctx.beginPath();
+            ctx.ellipse(rnd() * W, rnd() * H, 8 + rnd() * 18, 6 + rnd() * 12, rnd() * Math.PI, 0, Math.PI * 2);
+            ctx.fill();
+        }
+    } else if (id === "tribal") {
+        ctx.lineWidth = 7;
+        ctx.lineJoin = "miter";
+        for (let y = 10; y < H; y += 46) {
+            ctx.beginPath();
+            ctx.moveTo(8, y);
+            ctx.lineTo(W / 2, y + 30);
+            ctx.lineTo(W - 8, y);
+            ctx.stroke();
+        }
+        ctx.fillRect(W / 2 - 3, 0, 6, H);
+    }
+    texture = new THREE.CanvasTexture(canvas);
+    texture.colorSpace = THREE.SRGBColorSpace;
+    liveryCache.set(key, texture);
+    return texture;
+}
+
+function applyPaint(parts, model, job) {
+    const finish = FINISHES[job.finish] ?? FINISHES.gloss;
+    const base = job.color ?? model.color;
+    let mat = parts.bodyMat;
+    const wantPhysical = Boolean(finish.physical);
+    if (wantPhysical !== Boolean(mat.isMeshPhysicalMaterial)) {
+        const next = wantPhysical ? new THREE.MeshPhysicalMaterial({ color: base }) : createMaterial(base);
+        parts.meshes.paint.material = next;
+        mat.dispose();
+        parts.bodyMat = next;
+        mat = next;
+    }
+    mat.roughness = finish.roughness;
+    mat.metalness = finish.metalness;
+    if (wantPhysical) {
+        mat.clearcoat = finish.physical.clearcoat ?? 0;
+        mat.clearcoatRoughness = finish.physical.clearcoatRoughness ?? 0;
+        mat.iridescence = finish.physical.iridescence ?? 0;
+        mat.iridescenceIOR = finish.physical.iridescenceIOR ?? 1.3;
+    }
+    const map = job.livery ? liveryTexture(job.livery, base, job.color2 ?? "#f2f2f2") : null;
+    if (mat.map !== map) mat.needsUpdate = true;
+    mat.map = map;
+    mat.color.set(map ? "#ffffff" : base);
+
+    // Two-tone: the roof panel (trim group) takes the second colour.
+    const trimMesh = parts.meshes.trim;
+    if (trimMesh) {
+        if (job.color2 && !job.livery) {
+            if (!parts.twoTone) parts.twoTone = createMaterial(job.color2, { roughness: 0.3, metalness: 0.4 });
+            parts.twoTone.color.set(job.color2);
+            trimMesh.material = parts.twoTone;
+        } else {
+            trimMesh.material = parts.trimMat;
+            if (parts.twoTone) {
+                parts.twoTone.dispose();
+                parts.twoTone = null;
+            }
+        }
+    }
+}
+
+function applyRims(parts, choice) {
+    const { rim, rimMat } = wheelParts(choice.style ?? parts.rimStyle, parts.tireStyle);
+    for (const wheel of parts.wheels) {
+        wheel.rimMesh.geometry = rim;
+        wheel.rimMesh.material = rimMat;
+    }
+}
+
+/**
+ * Applies the player's cosmetic look (a resolved look from data/looks.js): paint finish, livery, two-tone roof,
+ * rims, underglow and headlight colour. Cheap no-op when nothing changed.
+ */
+export function applyLook(car, look) {
     const parts = car.userData.parts;
     const model = car.userData.model;
-    if (!parts?.bodyMat || !model) return;
-    parts.bodyMat.color.set(color ?? model.color);
-    parts.bodyMat.metalness = chrome ? 0.95 : 0.36;
-    parts.bodyMat.roughness = chrome ? 0.12 : 0.24;
+    if (!parts?.meshes || !model) return;
+    const key = lookKey(look);
+    if (parts.lookKey === key) return;
+    parts.lookKey = key;
+    applyPaint(parts, model, look.paint);
+    applyRims(parts, look.rims);
+    if (parts.meshes.glow) {
+        parts.meshes.glow.material = sharedPart(`glow:${look.neon.color}`, () => new THREE.MeshBasicMaterial({ color: glowColor(look.neon.color, 2.4) }));
+    }
+    if (parts.meshes.head) {
+        parts.meshes.head.material = sharedPart(`headlight:${look.lights.color}`, () => createMaterial(look.lights.color, { emissive: look.lights.color, emissiveIntensity: 0.8 }));
+    }
+    if (parts.spot) parts.spot.color.set(look.lights.beam);
+    parts.neonColor = look.neon.color;
+    parts.tuneKey = null;
 }
 
 function cached(key, build) {
@@ -121,6 +273,17 @@ function cabinGeometry(model, archetype) {
     });
 }
 
+/** Top-down planar UVs (u across the car, v along it) so livery textures read from the camera's point of view. */
+function projectUVs(geometry, width, length) {
+    const position = geometry.attributes.position;
+    const uv = new Float32Array(position.count * 2);
+    for (let i = 0; i < position.count; i += 1) {
+        uv[i * 2] = position.getX(i) / width + 0.5;
+        uv[i * 2 + 1] = position.getZ(i) / length + 0.5;
+    }
+    geometry.setAttribute("uv", new THREE.BufferAttribute(uv, 2));
+}
+
 function mergeAll(list) {
     if (!list.length) return null;
     const merged = list.length === 1 ? list[0] : mergeGeometries(list, false);
@@ -161,6 +324,7 @@ function staticGeometry(model, archetype) {
     entry = { glass: cabinGeometry(model, archetype) };
     for (const [name, list] of Object.entries(groups)) entry[name] = mergeAll(list);
     for (const geometry of Object.values(entry)) if (geometry) geometry.userData.shared = true;
+    if (entry.paint) projectUVs(entry.paint, W, L);
     staticCache.set(key, entry);
     return entry;
 }
@@ -213,26 +377,30 @@ export function createCar(model, sharedMaterials, options = {}) {
 
     // Static parts: a handful of merged meshes instead of one mesh per box.
     const fixed = staticGeometry(model, archetype);
-    const addMerged = (geometry, material, cast, receive) => {
+    const meshes = {};
+    const addMerged = (geometry, material, cast, receive, name) => {
         if (!geometry) return;
         const mesh = new THREE.Mesh(geometry, material);
         mesh.castShadow = cast;
         mesh.receiveShadow = receive;
         chassis.add(mesh);
+        if (name) meshes[name] = mesh;
     };
-    addMerged(fixed.paint, bodyMat, true, true);
+    addMerged(fixed.paint, bodyMat, true, true, "paint");
     addMerged(fixed.glass, sharedMaterials.glass, true, false);
-    addMerged(fixed.trim, trimMat, true, true);
+    addMerged(fixed.trim, trimMat, true, true, "trim");
     addMerged(fixed.dark, bumperMat, true, true);
     addMerged(fixed.accent, accentMat, true, true);
-    addMerged(fixed.head, headlightMat, false, false);
+    addMerged(fixed.head, headlightMat, false, false, "head");
     addMerged(fixed.tail, tailMat, false, false);
     // Neon strips glow beyond the bloom threshold, whatever the time of day.
-    addMerged(fixed.glow, sharedPart("glow:cyan", () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 2, 2.4) })), false, false);
+    addMerged(fixed.glow, sharedPart("glow:cyan", () => new THREE.MeshBasicMaterial({ color: new THREE.Color(0.3, 2, 2.4) })), false, false, "glow");
     chassis.position.y = model.lift ?? 0;
 
     // Wheels: pivot (steering) > spin (rolling) > tire + rim
-    const { tire, rim, rimMat, radius: tireRadius } = wheelParts(options.wheelStyle ?? model.wheelStyle ?? archetype.wheelStyle, model.tireStyle ?? archetype.tireStyle);
+    const rimStyle = options.wheelStyle ?? model.wheelStyle ?? archetype.wheelStyle;
+    const tireStyle = model.tireStyle ?? archetype.tireStyle;
+    const { tire, rim, rimMat, radius: tireRadius } = wheelParts(rimStyle, tireStyle);
     const wheels = [];
     const wheelSpots = wheelLayout(archetype, W, L);
     for (const spot of wheelSpots) {
@@ -246,10 +414,10 @@ export function createCar(model, sharedMaterials, options = {}) {
         rimMesh.position.x = (spot.sx || 1) * 0.01;
         spin.add(rimMesh);
         group.add(pivot);
-        wheels.push({ pivot, spin, front: spot.front });
+        wheels.push({ pivot, spin, front: spot.front, rimMesh });
     }
 
-    const parts = { bodyMat, archetype: archetype.id, paintKey: null, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius * (wheelSpots[0]?.scale ?? 1), tune: null, tuneKey: null, siren: null, spot: null };
+    const parts = { bodyMat, meshes, trimMat, rimStyle, tireStyle, lookKey: null, twoTone: null, neonColor: NEON_CYAN, archetype: archetype.id, beam: null, chassis, wheels, tailMat, headlightMat, wheelRadius: tireRadius * (wheelSpots[0]?.scale ?? 1), tune: null, tuneKey: null, siren: null, spot: null };
 
     if (options.police) {
         const style = options.lightbar ?? "bar";
@@ -322,7 +490,7 @@ export function applyTuning(car, upgrades = {}) {
     const parts = car.userData.parts;
     const model = car.userData.model;
     if (!parts || !model) return;
-    const key = `${model.id ?? model.name}:${upgrades.engine ?? 0}:${upgrades.grip ?? 0}:${upgrades.nitro ?? 0}:${upgrades.armor ?? 0}:${upgrades.neon ? 1 : 0}`;
+    const key = `${model.id ?? model.name}:${upgrades.engine ?? 0}:${upgrades.grip ?? 0}:${upgrades.nitro ?? 0}:${upgrades.armor ?? 0}:${upgrades.neon ? 1 : 0}:${parts.neonColor}`;
     if (parts.tuneKey === key) return;
     parts.tuneKey = key;
     if (parts.tune) {
@@ -350,7 +518,7 @@ export function applyTuning(car, upgrades = {}) {
     if ((upgrades.nitro ?? 0) >= 1 || upgrades.neon) {
         const glow = new THREE.Mesh(
             new THREE.PlaneGeometry(W * 0.95, L * 0.85).rotateX(-Math.PI / 2),
-            new THREE.MeshBasicMaterial({ color: new THREE.Color(0.2, 1.6, 2.4), transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending })
+            new THREE.MeshBasicMaterial({ color: glowColor(parts.neonColor ?? NEON_CYAN, 1.6), transparent: true, opacity: 0.55, depthWrite: false, blending: THREE.AdditiveBlending })
         );
         glow.position.y = -0.62;
         tune.add(glow);

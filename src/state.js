@@ -17,7 +17,7 @@ export function createInitialState() {
         reputation: { ...profile.reputation },
         tags: [...profile.tags],
         unlocks: [...profile.unlocks],
-        paint: profile.paint ?? "default",
+        look: { ...profile.look },
         race: null,
         lifetime: { ...profile.lifetime },
         profile,

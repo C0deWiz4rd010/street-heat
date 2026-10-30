@@ -1,5 +1,6 @@
 import { CAR_MODELS, CONFIG, DISTRICTS, VEHICLE_PHYSICS, WEATHER_MODES } from "../config.js";
 import { applyEngine, applyGrip, applySteering, cancelNormalVelocity, deriveSpec, glancingWallImpact, headOnDamp, playerRadius, surfaceAt, updateDrift } from "../physics/vehicle.js";
+import { resolveLook } from "../data/looks.js";
 import { clamp } from "../util/math.js";
 import { obstacleAt, pushOutBuildings } from "../world.js";
 import { replaceCarModel } from "../vehicles.js";
@@ -89,7 +90,7 @@ export function createPlayerSystem({
 
         if (nitro) {
             player.nitro = Math.max(0, player.nitro - dt * CONFIG.player.nitroBurn);
-            spawnParticle(player.x - fwdX * 2, player.z - fwdZ * 2, "#63c8ff", 2);
+            spawnParticle(player.x - fwdX * 2, player.z - fwdZ * 2, resolveLook(state.look, state.unlocks).flame.color, 2);
         } else {
             const districtNitro = district.nitroRegenBonus ?? 0;
             const shortcutNitro = inShortcut ? 0.95 : 0;

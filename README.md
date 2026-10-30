@@ -9,7 +9,7 @@ Street Heat ist ein Neon-Noir-Fluchtspiel im Browser, gebaut mit Three.js und Vi
 - **Polizei:** Verfolgung über das Straßennetz (A\*), Sichtlinie und Suchverhalten, Rollen (Tail, Flank, Ram, PIT, Zange, Blocker), Roadblocks, Spike-Strips mit Vorwarnung, EMP, Helikopter bei Heat 5.
 - **Missionen:** Missionsketten pro Bezirk (deklarativ in `src/data/missions.js`), Boss-Aufträge, Modifier („Nachtfahrt“, „Keine Bremse“, „Erzwungene Verfolgung“, „Zeitangriff“) und ein echter Fail-State mit Wiederholen gegen Cash.
 - **Events und Sammelobjekte:** Welt-Events, illegale Straßenrennen gegen KI-Rivalen, 40 Graffiti-Tags (10 pro Bezirk).
-- **Progression:** Garage mit Autos, Upgrades (sichtbares Tuning) und Lackfarben. Bezirksruf mit fünf Stufen und Freischaltungen, Contracts, Achievements, Run-Zusammenfassung mit Score-Aufschlüsselung.
+- **Progression:** Garage mit Autos, Upgrades (sichtbares Tuning) und Looks (19 Lackierungen mit Finish und Livery, Felgen, Unterboden-Neon, Nitro-Flamme, Scheinwerferfarbe) mit drehbarer 3D-Vorschau in der Garage. Bezirksruf mit fünf Stufen und Freischaltungen, Contracts, Achievements, Run-Zusammenfassung mit Score-Aufschlüsselung.
 - **Audio:** Rein synthetisch: Motor mit Gängen, Sirenen (Wail, Hi-Lo, Yelp), Rotor, Effekte und eine prozedurale Synthwave-Musik, deren Ebenen mit dem Heat wachsen. Getrennte Regler für Gesamt, Musik und Effekte.
 - **Eingabe:** Tastatur (frei belegbar), Gamepad (analog, Rumble, Menünavigation), Touch (virtueller Stick).
 

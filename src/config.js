@@ -75,15 +75,7 @@ export const REPUTATION_TIERS = [
     { name: "Bezirkskönig", at: 1400, cashBonus: 0.2, unlock: "Kosmetik Unterboden-Neon" },
 ];
 
-// Paint jobs for the player car. `unlock` names an entry in profile.unlocks (reputation rewards).
-export const PAINTS = [
-    { id: "default", label: "Original", color: null, unlock: null },
-    { id: "white", label: "Weiß", color: "#e9edf2", unlock: null },
-    { id: "black", label: "Schwarz", color: "#14171c", unlock: null },
-    { id: "blue", label: "Blau", color: "#2f6fd6", unlock: null },
-    { id: "pink", label: "Neon-Pink", color: "#ff3fa4", unlock: "Lackfarbe Neon-Pink" },
-    { id: "chrome", label: "Chrom", color: "#c9d2dc", unlock: "Lackfarbe Chrom", chrome: true },
-];
+// Paint jobs and the other cosmetic choices live in data/looks.js.
 
 export const REPUTATION_GAINS = { mission: 40, boss: 100, event: 15, tag: 10, tagSet: 80 };
 export const TAGS_PER_DISTRICT = 10;

@@ -1443,3 +1443,49 @@ select:focus-visible,
     color: var(--warn-alt);
     font-size: 12px;
 }
+
+.look-studio {
+    display: grid;
+    gap: 14px;
+    grid-template-columns: minmax(240px, 360px) 1fr;
+    margin: 12px 0;
+}
+
+.look-preview {
+    display: grid;
+    gap: 4px;
+}
+
+.look-preview canvas {
+    background: radial-gradient(circle at 50% 40%, rgba(60, 90, 140, 0.35), rgba(8, 10, 16, 0.9));
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    cursor: grab;
+    height: auto;
+    max-width: 100%;
+    touch-action: none;
+    width: 100%;
+}
+
+.look-preview small {
+    color: var(--muted, #8b95a5);
+    font-size: 11px;
+}
+
+.look-groups {
+    display: grid;
+    gap: 8px;
+}
+
+.look-group h3 {
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    margin: 0 0 4px;
+    text-transform: uppercase;
+}
+
+@media (max-width: 720px) {
+    .look-studio {
+        grid-template-columns: 1fr;
+    }
+}

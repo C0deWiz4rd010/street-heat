@@ -1,8 +1,9 @@
+import { LOOK_GROUPS, isUnlocked } from "./data/looks.js";
 import { carRequirement, reputationTier } from "./progression.js";
 import { clamp } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
 import { REPUTATION_TIERS } from "./config.js";
-import { ACHIEVEMENTS, COMBO_TIERS, PAINTS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
+import { ACHIEVEMENTS, COMBO_TIERS, CONFIG, CAR_MODELS, CONTRACTS, POIS, UPGRADES } from "./config.js";
 
 // Colours come from the CSS tokens (:root) so the HUD canvas and the stylesheet stay in sync.
 const palette = {};
@@ -169,7 +170,13 @@ export function mountHud(root) {
             </div>
             <div class="garage-cash">Bank <strong id="garageCash">$0</strong></div>
             <div class="garage-grid" id="carList"></div>
-            <div class="paint-list" id="paintList" role="group" aria-label="Lackierung"></div>
+            <div class="look-studio">
+                <div class="look-preview">
+                    <canvas id="garagePreview" width="360" height="220" aria-label="3D-Vorschau, ziehen zum Drehen"></canvas>
+                    <small>Ziehen oder Pfeiltasten zum Drehen</small>
+                </div>
+                <div class="look-groups" id="lookList"></div>
+            </div>
             <div class="garage-upgrades" id="upgradeList"></div>
             <div class="achievement-list" id="achievementList"></div>
         </div>
@@ -323,7 +330,8 @@ export function mountHud(root) {
         closeGarageBtn: document.getElementById("closeGarageBtn"),
         garageCash: document.getElementById("garageCash"),
         carList: document.getElementById("carList"),
-        paintList: document.getElementById("paintList"),
+        lookList: document.getElementById("lookList"),
+        garagePreview: document.getElementById("garagePreview"),
         upgradeList: document.getElementById("upgradeList"),
         achievementList: document.getElementById("achievementList"),
         debugPanel: document.getElementById("debugPanel"),
@@ -716,14 +724,21 @@ function renderProfileHud(ui, state) {
 
 function renderGarageHud(ui, state) {
     // Rebuilding the buttons every frame would drop keyboard focus, so only redraw on change.
-    const signature = JSON.stringify([Math.round(state.cash), state.unlockedCars, state.playerModelIndex, state.upgrades, state.paint, state.unlocks, state.reputation, state.achievements.length, state.screen === "garage"]);
+    const signature = JSON.stringify([Math.round(state.cash), state.unlockedCars, state.playerModelIndex, state.upgrades, state.look, state.unlocks, state.reputation, state.achievements.length, state.screen === "garage"]);
     if (ui._garageSignature === signature) return;
     ui._garageSignature = signature;
-    ui.paintList.innerHTML = PAINTS.map((paint) => {
-        const locked = paint.unlock && !state.unlocks.includes(paint.unlock);
-        const active = state.paint === paint.id;
-        return `<button class="paint-swatch ${active ? "selected" : ""}" data-paint-id="${paint.id}" aria-pressed="${active}" ${locked ? `disabled title="Gesperrt: ${paint.unlock}"` : ""} style="--swatch:${paint.color ?? "#888"}">${paint.label}</button>`;
-    }).join("");
+    ui.lookList.innerHTML = LOOK_GROUPS.map((group) => `
+        <div class="look-group">
+            <h3>${group.label}</h3>
+            <div class="paint-list" role="group" aria-label="${group.label}">
+                ${group.options.map((option) => {
+                    const locked = !isUnlocked(option, state.unlocks);
+                    const active = state.look[group.key] === option.id;
+                    const swatch = option.color ?? "#888";
+                    return `<button class="paint-swatch ${active ? "selected" : ""}" data-look-key="${group.key}" data-look-id="${option.id}" aria-pressed="${active}" ${locked ? `disabled title="Gesperrt: ${option.unlock}"` : ""} style="--swatch:${swatch}">${option.label}</button>`;
+                }).join("")}
+            </div>
+        </div>`).join("");
     ui.garageCash.textContent = `$${Math.round(state.cash).toLocaleString("de-DE")}`;
     ui.carList.innerHTML = CAR_MODELS.map((car, index) => {
         const unlocked = state.unlockedCars.includes(car.id);

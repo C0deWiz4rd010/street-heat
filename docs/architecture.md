@@ -38,7 +38,8 @@ Diese Module kennen weder DOM noch Three.js und laufen in `npm test` headless:
 | `scoring.js` | Combo-Multiplikator und -Timer, Heat-Abklingen |
 | `economy.js` | Kapazitäten (Karosserie, Nitro), Cash pro Run, Preistabelle |
 | `progression.js` | Ruf-Stufen, Graffiti-Tag-Verteilung, Auto-Freischaltung über Ruf (`carRequirement`) |
-| `save.js` | Format-Version, Migration, Laden mit Prüfung |
+| `save.js` | Format-Version (4), Migration (`paint` wird zu `look`), Laden mit Prüfung |
+| `data/looks.js`, `garagePreview.js` | Kosmetik-Daten (`PAINT_JOBS`, `FINISHES`, `LIVERIES`, Felgen, Neon, Flamme, Licht), `resolveLook` mit Freischaltungs-Fallback; Garage-Drehteller, der mit dem Spiel-Renderer in ein Render-Target zeichnet und in ein 2D-Canvas kopiert |
 | `bindings.js`, `gamepad.js` | Tasten-Mapping, Gamepad-Lesen, Rumble-Stärke |
 | `music.js`, `siren.js` | Notendaten, Ebenen je Heat, Sirenen-Muster (Synthese in `audio.js`/`siren.js`) |
 | `onboarding.js`, `settings.js` | Tutorial-Schritte, Einstellungen mit Validierung |

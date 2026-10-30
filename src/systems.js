@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, PAINTS, REPUTATION_GAINS, UPGRADES, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
+import { ACHIEVEMENTS, CONFIG, CAR_MODELS, CONTRACTS, DISTRICTS, HEAT_TIERS, PICKUP_TYPES, POIS, REPUTATION_GAINS, UPGRADES, WEATHER_MODES, WORLD_EVENTS } from "./config.js";
 import { clamp, distanceSq, axisYaw } from "./util/math.js";
 import { maxHealth, nitroCapacity } from "./economy.js";
 import { registerCombo, tickCombo } from "./scoring.js";
@@ -17,7 +17,8 @@ import { buildRoadGraph } from "./ai/police.js";
 import { SAVE_VERSION, clearProfile, createDefaultProfile, saveProfile } from "./save.js";
 import { hideGameOver, renderHud } from "./ui.js";
 import { createEffects, disposeObject, markShared } from "./effects.js";
-import { applyTuning, createCar, createMaterial, replaceCarModel, setHeadlightBeamLevel, setPaint, updateCarVisuals } from "./vehicles.js";
+import { LOOK_GROUPS, isUnlocked, resolveLook } from "./data/looks.js";
+import { applyLook, applyTuning, createCar, createMaterial, replaceCarModel, setHeadlightBeamLevel, updateCarVisuals } from "./vehicles.js";
 import { buildingsNear, insideBuilding, obstaclesNear, snapStreet } from "./world.js";
 
 const PHYSICS_DT = 1 / 60;
@@ -1306,17 +1307,19 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         else openGarage();
     }
 
-    function setPaintById(id) {
-        const paint = PAINTS.find((entry) => entry.id === id);
-        if (!paint) return;
-        if (paint.unlock && !state.unlocks.includes(paint.unlock)) {
-            setStatus(`${paint.label}: noch gesperrt (${paint.unlock}).`, 1.8);
+    /** Picks one cosmetic option (paint, rims, neon, flame, lights) from the garage. Locked options are refused. */
+    function setLookOption(key, id) {
+        const group = LOOK_GROUPS.find((entry) => entry.key === key);
+        const option = group?.options.find((entry) => entry.id === id);
+        if (!option) return;
+        if (!isUnlocked(option, state.unlocks)) {
+            setStatus(`${option.label}: noch gesperrt (${option.unlock}).`, 1.8);
             audio?.denied?.();
             return;
         }
-        state.paint = paint.id;
+        state.look = { ...state.look, [key]: option.id };
         persistProfile();
-        setStatus(`Lackierung: ${paint.label}.`, 1.4);
+        setStatus(`${group.label}: ${option.label}.`, 1.4);
     }
 
     function resetProfile() {
@@ -1329,7 +1332,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         state.reputation = { ...fresh.reputation };
         state.tags = [];
         state.unlocks = [];
-        state.paint = "default";
+        state.look = { ...fresh.look };
         for (const tag of world.tags ?? []) {
             tag.collected = false;
             tag.mesh.visible = true;
@@ -1366,7 +1369,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
             reputation: { ...state.reputation },
             tags: [...state.tags],
             unlocks: [...state.unlocks],
-            paint: state.paint,
+            look: { ...state.look },
             contract: { id: state.contract.id, progress: state.contract.progress, claimed: state.contract.claimed },
             lifetime: { ...state.lifetime },
         };
@@ -1467,11 +1470,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         const player = state.player;
         const night = 1 - (state.time.daylight ?? 1);
         applyTuning(playerCar, { ...state.upgrades, neon: state.unlocks.includes("Kosmetik Unterboden-Neon") });
-        const paint = PAINTS.find((entry) => entry.id === state.paint && (!entry.unlock || state.unlocks.includes(entry.unlock))) ?? PAINTS[0];
-        if (playerCar.userData.parts.paintKey !== paint.id) {
-            playerCar.userData.parts.paintKey = paint.id;
-            setPaint(playerCar, paint.color, paint.chrome);
-        }
+        applyLook(playerCar, resolveLook(state.look, state.unlocks));
         setHeadlightBeamLevel(Math.min(1, night + (state.weather.mode === "fog" ? 0.5 : 0)));
         updateCarVisuals(playerCar, dt, {
             speed: player.speed,
@@ -1847,7 +1846,7 @@ export function createGameRuntime({ scene, camera, renderer, world, ui, state, s
         closeGarage,
         buyUpgrade,
         buyOrSelectCar,
-        setPaint: setPaintById,
+        setLookOption,
         resetProfile,
         // Dev-only handles for in-browser checks.
         debug: import.meta.env?.DEV ? { startRace: raceSystem.start, tags: tagSystem.tags, traffic, police, missions: missionSystem } : null,

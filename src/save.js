@@ -1,10 +1,13 @@
+import { normalizeLook } from "./data/looks.js";
+
 // The storage key keeps its old name so existing saves are found; the format version lives inside the data.
 const SAVE_KEY = "neon-pursuit-profile-v2";
-export const SAVE_VERSION = 3;
+export const SAVE_VERSION = 4;
 
 /**
  * Brings a stored profile up to the current format. v2 -> v3 adds district reputation, graffiti tags,
- * reputation unlocks, the paint job and the carried-over contract.
+ * reputation unlocks, the paint job and the carried-over contract. v3 -> v4 replaces `paint` by `look`
+ * (paint, rims, neon, flame, lights).
  */
 export function migrateProfile(raw) {
     const profile = { ...raw };
@@ -15,6 +18,10 @@ export function migrateProfile(raw) {
         profile.unlocks = profile.unlocks ?? [];
         profile.paint = profile.paint ?? "default";
         profile.contract = profile.contract ?? null;
+    }
+    if (version < 4) {
+        profile.look = normalizeLook({ ...profile.look, paint: profile.paint });
+        delete profile.paint;
     }
     profile.version = Math.max(version, SAVE_VERSION);
     return profile;
@@ -33,7 +40,7 @@ export function createDefaultProfile(carModels, upgrades) {
         reputation: { downtown: 0, industrial: 0, park: 0, harbor: 0 },
         tags: [],
         unlocks: [],
-        paint: "default",
+        look: normalizeLook(),
         contract: null,
         lifetime: {
             missions: 0,
@@ -76,7 +83,7 @@ export function loadProfile(carModels, upgrades) {
                 ...Object.fromEntries(Object.entries(parsed.reputation ?? {}).map(([key, value]) => [key, Math.max(0, Number(value) || 0)])),
             },
             tags: Array.isArray(parsed.tags) ? parsed.tags.filter((id) => typeof id === "string") : [],
-            paint: typeof parsed.paint === "string" ? parsed.paint : "default",
+            look: normalizeLook(parsed.look),
             unlocks: Array.isArray(parsed.unlocks) ? parsed.unlocks.filter((id) => typeof id === "string") : [],
             contract: parsed.contract && typeof parsed.contract.id === "string"
                 ? { id: parsed.contract.id, progress: Number(parsed.contract.progress) || 0, claimed: Boolean(parsed.contract.claimed) }
